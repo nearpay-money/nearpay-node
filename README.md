@@ -49,19 +49,19 @@ try {
 }
 ```
 
-| Resource                      | Methods (spec route)                                        |
-| ----------------------------- | ----------------------------------------------------------- |
-| `checkout.sessions`           | `create`, `retrieve(id, {expand})`, `list`, `expire(id)`    |
-| `paymentIntents`              | `retrieve(id)`, `list`, `cancel(id, {cancellation_reason})` |
-| `balanceTransactions`         | `list`                                                      |
-| `settlementDestinations`      | `retrieve(id)`, `list`                                      |
-| `webhookEndpoints`            | `create`, `retrieve`, `list`, `update`, `del`, `test`       |
-| `events`                      | `retrieve(id)`, `list`                                      |
-| `webhookSigningKeys`          | `list` (JWKS for `verifyEd25519`)                           |
-| `agentPayments`               | `retrieve(id)`, `list`                                      |
-| `x402`                        | `supported`, `requirements`, `verify`, `settle`             |
-| `assets`                      | `list`                                                      |
-| `testHelpers.paymentAttempts` | `advance(attemptId, {to})` (test mode)                      |
+| Resource                      | Methods (spec route)                                                    |
+| ----------------------------- | ----------------------------------------------------------------------- |
+| `checkout.sessions`           | `create`, `retrieve(id, {expand})`, `list`, `expire(id)`                |
+| `paymentIntents`              | `retrieve(id)`, `list`, `cancel(id, {cancellation_reason})`             |
+| `balanceTransactions`         | `list`                                                                  |
+| `settlementDestinations`      | `retrieve(id)`, `list`                                                  |
+| `webhookEndpoints`            | `create`, `retrieve`, `list`, `update`, `del`, `test`, `listDeliveries` |
+| `events`                      | `retrieve(id)`, `list`                                                  |
+| `webhookSigningKeys`          | `list` (JWKS for `verifyEd25519`)                                       |
+| `agentPayments`               | `retrieve(id)`, `list`                                                  |
+| `x402`                        | `supported`, `requirements`, `verify`, `settle`                         |
+| `assets`                      | `list`                                                                  |
+| `testHelpers.paymentAttempts` | `advance(attemptId, {to})` (test mode)                                  |
 
 Every method is bound from a route of `@nearpay/spec` (`src/resources/routes.ts`); arguments and results
 are typed from the route's zod schemas. Shape: `(pathParam?, bodyOrQuery?, options?)` where `options` is

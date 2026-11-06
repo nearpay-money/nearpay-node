@@ -4,6 +4,8 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import { errorFromResponse } from "../../src/http/errors.js";
 import { Transport } from "../../src/http/transport.js";
 import {
+  type AgentPayment,
+  type CheckoutSession,
   DEFAULT_BASE_URL,
   NearPay,
   NearPayApiError,
@@ -18,6 +20,7 @@ import {
   NearPayStateConflictError,
   RESOURCES,
   SDK_VERSION,
+  type WebhookDelivery,
 } from "../../src/index.js";
 import { bindRoute, pathParamNames, routesOf } from "../../src/resources/bind.js";
 
@@ -110,6 +113,44 @@ describe("method types come from the spec schemas", () => {
     void (() => np.paymentIntents.cancel("pi_x", { reason: "x" }));
     void (() => np.checkout.sessions.expire("cs_x"));
     void (() => np.testHelpers.paymentAttempts.advance("pa_x", { to: "success" }));
+  });
+
+  it("types the spec 0.1.5 additions: deliveries, sequence, replayed", () => {
+    const np = new NearPay("sk_test_types", { fetch: async () => new Response("{}") });
+    type Deliveries = Awaited<ReturnType<typeof np.webhookEndpoints.listDeliveries>>;
+    expectTypeOf<Deliveries["data"][number]>().toEqualTypeOf<WebhookDelivery>();
+    expectTypeOf<WebhookDelivery["id"]>().toEqualTypeOf<`whd_${string}`>();
+    expectTypeOf<WebhookDelivery["status"]>().toEqualTypeOf<"pending" | "succeeded" | "failed" | "abandoned">();
+    expectTypeOf<WebhookDelivery["last_status_code"]>().toEqualTypeOf<number | null>();
+    type DeliveriesQuery = NonNullable<Parameters<typeof np.webhookEndpoints.listDeliveries>[1]>;
+    expectTypeOf<DeliveriesQuery["starting_after"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<CheckoutSession["sequence"]>().toEqualTypeOf<number | undefined>();
+    expectTypeOf<AgentPayment["sequence"]>().toEqualTypeOf<number | undefined>();
+    type Settled = Awaited<ReturnType<typeof np.x402.settle>>;
+    expectTypeOf<Settled["replayed"]>().toEqualTypeOf<boolean | undefined>();
+    // @ts-expect-error the endpoint id is required
+    void (() => np.webhookEndpoints.listDeliveries());
+  });
+
+  it("returns responses as received: unknown open-enum values are kept, never rejected (LLD §1)", async () => {
+    const body = {
+      object: "list",
+      data: [{ id: "whd_1", object: "webhook_delivery", status: "quarantined", attempts: 1 }],
+      has_more: false,
+      url: "/v1/webhook_endpoints/we_1/deliveries",
+    };
+    const seen: string[] = [];
+    const np = new NearPay("sk_test_abc", {
+      baseUrl: "https://api.nearpay.localhost",
+      fetch: async (url) => {
+        seen.push(String(url));
+        return new Response(JSON.stringify(body), { status: 200 });
+      },
+    });
+    const page = await np.webhookEndpoints.listDeliveries("we_1", { limit: 5 });
+    expect(page).toEqual(body);
+    expect(page.data[0]?.status as string).toBe("quarantined");
+    expect(seen).toEqual(["https://api.nearpay.localhost/v1/webhook_endpoints/we_1/deliveries?limit=5"]);
   });
 });
 

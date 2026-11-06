@@ -182,4 +182,35 @@ describe("event typing", () => {
     if (evt.type === "ping") expectTypeOf(evt.data.object.webhook_endpoint).toEqualTypeOf<`we_${string}`>();
     expect(evt.data.object.id).toBe("pi_01jbz9k3m4n5p6q7r8s9t0v1w2");
   });
+
+  it("types sequence (spec 0.1.5) on checkout session and agent payment objects", () => {
+    const evt = constructEvent(v.raw_body, v.header, v.secret, { now });
+    if (evt.type === "checkout.session.completed") {
+      expectTypeOf(evt.data.object.sequence).toEqualTypeOf<number | undefined>();
+    }
+    if (evt.type === "agent_payment.settled") {
+      expectTypeOf(evt.data.object.sequence).toEqualTypeOf<number | undefined>();
+    }
+  });
+});
+
+describe("open enums (api-conventions §5)", () => {
+  it("returns unknown event types and open-enum values verbatim (no response validation, LLD §1)", () => {
+    const payload = JSON.stringify({
+      id: "evt_01jbz9k3m4n5p6q7r8s9t0v1w9",
+      object: "event",
+      type: "payment_intent.teleported",
+      api_version: "2026-11-01",
+      created: v.timestamp,
+      livemode: false,
+      data: {
+        object: { id: "pi_01jbz9k3m4n5p6q7r8s9t0v1w2", object: "payment_intent", status: "levitating", sequence: 7 },
+      },
+      request: { id: null, idempotency_key: null },
+    });
+    const header = generateTestHeaderString({ payload, secret: v.secret, timestamp: v.timestamp });
+    const evt = constructEvent(payload, header, v.secret, { now });
+    expect(evt.type as string).toBe("payment_intent.teleported");
+    expect(evt.data.object).toMatchObject({ status: "levitating", sequence: 7 });
+  });
 });

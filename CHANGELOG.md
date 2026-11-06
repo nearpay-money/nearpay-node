@@ -2,6 +2,16 @@
 
 `@nearpay/node` follows semver. Breaking changes bump the major version and carry a migration note here.
 
+## Unreleased — Stage 1, step 1.4 (`@nearpay/spec` 0.1.5)
+
+- `webhookEndpoints.listDeliveries(id, {limit?, starting_after?, ending_before?})` — an endpoint's
+  delivery log (`GET /v1/webhook_endpoints/{id}/deliveries`, cursor list of `WebhookDelivery`).
+- `WebhookDelivery` type export; `sequence` on `CheckoutSession` / `AgentPayment` (and their webhook
+  objects) and x402 `SettleResponse.replayed` come typed from the spec.
+- Not bound: `getDashboardSession` and `challengeSettlementDestination` (session-only dashboard routes).
+- Responses are still returned as received (no response validation, LLD §1), so unknown open-enum
+  values pass through; tests pin this.
+
 ## 0.1.0 — Stage 1, step 1.3
 
 First release (Stage 1 subset of `nearpay-brain/lld/sdks-and-tools.md` §1), built on `@nearpay/spec` 0.1.4:

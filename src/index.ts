@@ -52,6 +52,7 @@ export type {
   RouteResult,
 } from "./resources/bind.js";
 export { RESOURCES, type Resources } from "./resources/routes.js";
+export type { WebhookDelivery } from "./types.js";
 export { SDK_VERSION } from "./version.js";
 export {
   computeV1Signature,
