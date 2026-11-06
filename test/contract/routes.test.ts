@@ -2,7 +2,7 @@
  * Contract test: every SDK method is called through a minimal gateway into the spec-driven mock of the
  * owning service (`mockPeer`). The mock validates path, query and body strictly against the route,
  * authorizes the secret-key principal from the route's `auth`, and validates every response against the
- * route's response schema; so a passing call proves the SDK's request matches `@nearpay/spec` 0.1.4.
+ * route's response schema; so a passing call proves the SDK's request matches `@nearpay/spec` 0.1.5.
  */
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -28,6 +28,7 @@ import {
   listEvents,
   listPaymentIntents,
   listSettlementDestinations,
+  listWebhookEndpointDeliveries,
   listWebhookEndpoints,
   listWebhookSigningKeys,
   MultiPayload,
@@ -37,6 +38,7 @@ import {
   testWebhookEndpoint,
   updateWebhookEndpoint,
   VerifyResponse,
+  WebhookDelivery,
   WebhookEndpoint,
   x402Requirements,
   x402Settle,
@@ -88,6 +90,21 @@ const pingEvent = Event.parse({
   livemode: false,
   data: { object: { object: "ping", webhook_endpoint: endpoint.id } },
   request: { id: null, idempotency_key: null },
+});
+const delivery = WebhookDelivery.parse({
+  id: "whd_01jbz9k3m4n5p6q7r8s9t0v1w2",
+  object: "webhook_delivery",
+  created: now(),
+  livemode: false,
+  webhook_endpoint: endpoint.id,
+  event: "evt_01jbz9k3m4n5p6q7r8s9t0v1w3",
+  event_type: "payment_intent.succeeded",
+  status: "failed",
+  attempts: 2,
+  last_status_code: 500,
+  last_error: "non-2xx response",
+  next_attempt_at: now() + 60,
+  succeeded_at: null,
 });
 const requirements = {
   scheme: "exact",
@@ -170,10 +187,13 @@ describe("payments", () => {
 
   it("retrieves (with expand[]) and lists sessions with created filters", async () => {
     const payments = gw.peer("payments");
-    const s = checkoutSession();
+    const s = { ...checkoutSession(), sequence: 4 };
     payments.on(getCheckoutSession, async () => s);
     payments.on(listCheckoutSessions, async () => list("/v1/checkout/sessions", [s]));
-    expect((await np.checkout.sessions.retrieve(s.id, { expand: ["payment_intent"] })).id).toBe(s.id);
+    expect(await np.checkout.sessions.retrieve(s.id, { expand: ["payment_intent"] })).toMatchObject({
+      id: s.id,
+      sequence: 4,
+    });
     const page = await np.checkout.sessions.list({ limit: 2, "created[gte]": 1, status: "open" });
     expect(page.data).toHaveLength(1);
     expect(payments.callsTo(getCheckoutSession)[0]?.query).toEqual({ expand: ["payment_intent"] });
@@ -243,6 +263,21 @@ describe("webhooks and events", () => {
     expect(w.callsTo(updateWebhookEndpoint)[0]?.idempotencyKey).toBeDefined();
   });
 
+  it("lists an endpoint's deliveries with cursor pagination (spec 0.1.5)", async () => {
+    const w = gw.peer("webhooks");
+    w.on(listWebhookEndpointDeliveries, async () => ({
+      ...list(`/v1/webhook_endpoints/${endpoint.id}/deliveries`, [delivery]),
+      has_more: true,
+    }));
+    const page = await np.webhookEndpoints.listDeliveries(endpoint.id, { limit: 1, starting_after: "whd_x" });
+    expect(page.has_more).toBe(true);
+    expect(page.data[0]).toMatchObject({ id: delivery.id, status: "failed", attempts: 2, last_status_code: 500 });
+    const call = w.callsTo(listWebhookEndpointDeliveries)[0];
+    expect(call?.params).toEqual({ id: endpoint.id });
+    expect(call?.query).toMatchObject({ limit: 1, starting_after: "whd_x" });
+    expect(call?.idempotencyKey).toBeUndefined();
+  });
+
   it("lists and retrieves events and fetches the signing keys anonymously", async () => {
     const w = gw.peer("webhooks");
     w.on(listEvents, async () => list("/v1/events", [pingEvent]));
@@ -271,11 +306,11 @@ describe("webhooks and events", () => {
 describe("agent payments and x402", () => {
   it("lists and retrieves agent payments", async () => {
     const a = gw.peer("agentpay");
-    const ap = agentPayment();
+    const ap = { ...agentPayment(), sequence: 2 };
     a.on(listAgentPayments, async () => list("/v1/agent_payments", [ap]));
     a.on(getAgentPayment, async () => ap);
     expect((await np.agentPayments.list({ kind: "x402" })).data[0]?.id).toBe(ap.id);
-    expect((await np.agentPayments.retrieve(ap.id)).kind).toBe(ap.kind);
+    expect(await np.agentPayments.retrieve(ap.id)).toMatchObject({ kind: ap.kind, sequence: 2 });
   });
 
   it("calls the facilitator: supported, requirements, verify, settle", async () => {
@@ -297,7 +332,13 @@ describe("agent payments and x402", () => {
     a.on(x402Requirements, async () => paymentRequired);
     a.on(x402Verify, async () => VerifyResponse.parse({ isValid: true, payer: "agent.near" }));
     a.on(x402Settle, async () =>
-      SettleResponse.parse({ success: true, transaction: "8xQ3mTn2tx", network: "near:mainnet", amount: "2000000" }),
+      SettleResponse.parse({
+        success: true,
+        transaction: "8xQ3mTn2tx",
+        network: "near:mainnet",
+        amount: "2000000",
+        replayed: true,
+      }),
     );
     expect((await np.x402.supported()).kinds).toHaveLength(1);
     const req = await np.x402.requirements({
@@ -306,7 +347,7 @@ describe("agent payments and x402", () => {
     });
     expect(req.accepts[0]?.payTo).toBe("merchant.near");
     expect((await np.x402.verify(verifyRequest)).isValid).toBe(true);
-    expect((await np.x402.settle(verifyRequest)).success).toBe(true);
+    expect(await np.x402.settle(verifyRequest)).toMatchObject({ success: true, replayed: true });
     expect(a.callsTo(x402Requirements)[0]?.body).toMatchObject({ max_timeout_s: 120 });
   });
 });
@@ -357,6 +398,7 @@ it("covers every bound route in the cases above", () => {
     updateWebhookEndpoint,
     testWebhookEndpoint,
     deleteWebhookEndpoint,
+    listWebhookEndpointDeliveries,
     listEvents,
     getEvent,
     listWebhookSigningKeys,

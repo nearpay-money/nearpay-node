@@ -43,7 +43,7 @@
     "release:local": "node scripts/release-local.mjs"
   },
   "dependencies": {
-    "@nearpay/spec": "0.1.4"
+    "@nearpay/spec": "0.1.5"
   },
   "peerDependencies": {
     "zod": "^4.6.7"
@@ -59,8 +59,8 @@
   },
   "pnpm": {
     "overrides": {
-      "@nearpay/spec": "0.1.4",
-      "@nearpay-internal/spec": "0.1.4"
+      "@nearpay/spec": "0.1.5",
+      "@nearpay-internal/spec": "0.1.5"
     },
     "onlyBuiltDependencies": [
       "esbuild",

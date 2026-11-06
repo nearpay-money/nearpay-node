@@ -1,5 +1,5 @@
 /**
- * The SDK's resource tree: Stage 1 public routes of `@nearpay/spec` 0.1.4 that a server holding a
+ * The SDK's resource tree: Stage 1 public routes of `@nearpay/spec` 0.1.5 that a server holding a
  * secret or restricted key calls, plus the anonymous reads a server needs (webhook signing keys,
  * assets, x402 `supported`). Payer routes (`client_secret`) and dashboard routes (`session` only)
  * are not part of a server SDK. `test/unit/resources.test.ts` checks this tree against `PUBLIC_ROUTES`,
@@ -27,6 +27,7 @@ import {
   listEvents,
   listPaymentIntents,
   listSettlementDestinations,
+  listWebhookEndpointDeliveries,
   listWebhookEndpoints,
   listWebhookSigningKeys,
   testWebhookEndpoint,
@@ -65,6 +66,7 @@ export const RESOURCES = {
     update: updateWebhookEndpoint,
     del: deleteWebhookEndpoint,
     test: testWebhookEndpoint,
+    listDeliveries: listWebhookEndpointDeliveries,
   },
   events: {
     retrieve: getEvent,
