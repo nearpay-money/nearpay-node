@@ -1,0 +1,72 @@
+{
+  "name": "@nearpay/node",
+  "version": "0.1.0",
+  "description": "NearPay server SDK for Node.js and TypeScript: typed resources from @nearpay/spec, automatic idempotency keys and retries, webhook signature verification.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "sideEffects": false,
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=22.11.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "nearpay",
+    "payments",
+    "near",
+    "near-intents",
+    "crypto",
+    "sdk"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "test": "vitest run --project unit",
+    "test:contract": "vitest run --project contract",
+    "test:all": "vitest run",
+    "coverage": "vitest run --project unit --coverage",
+    "verify": "pnpm typecheck && pnpm lint && pnpm coverage && pnpm test:contract && pnpm build",
+    "release:local": "node scripts/release-local.mjs"
+  },
+  "dependencies": {
+    "@nearpay/spec": "0.1.4"
+  },
+  "peerDependencies": {
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.5",
+    "@nearpay-internal/testing": "0.1.2",
+    "@types/node": "22.20.5",
+    "@vitest/coverage-v8": "2.1.9",
+    "typescript": "5.9.3",
+    "vitest": "2.1.9",
+    "zod": "4.6.7"
+  },
+  "pnpm": {
+    "overrides": {
+      "@nearpay/spec": "0.1.4",
+      "@nearpay-internal/spec": "0.1.4"
+    },
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "cpu-features",
+      "ssh2",
+      "protobufjs"
+    ]
+  }
+}
