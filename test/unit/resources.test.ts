@@ -7,6 +7,7 @@ import {
   type AgentPayment,
   type CheckoutSession,
   DEFAULT_BASE_URL,
+  methodAccess,
   NearPay,
   NearPayApiError,
   NearPayAuthenticationError,
@@ -19,7 +20,9 @@ import {
   NearPayRateLimitError,
   NearPayStateConflictError,
   RESOURCES,
+  restrictedKeyScope,
   SDK_VERSION,
+  scopesFor,
   type WebhookDelivery,
 } from "../../src/index.js";
 import { bindRoute, pathParamNames, routesOf } from "../../src/resources/bind.js";
@@ -29,8 +32,8 @@ const keyCallable = (r: AnyRoute) => r.auth.some((a) => a === "secret_key" || a.
 describe("resource tree vs the spec route table", () => {
   const bound = routesOf(RESOURCES);
 
-  it("binds every Stage 1 public route a secret or restricted key can call, exactly once", () => {
-    const expected = PUBLIC_ROUTES.filter((r) => r.stage === 1 && keyCallable(r))
+  it("binds every public route a secret or restricted key can call (Stages 1–2), exactly once", () => {
+    const expected = PUBLIC_ROUTES.filter((r) => keyCallable(r))
       .map((r) => r.id)
       .sort();
     const got = bound
@@ -66,8 +69,39 @@ describe("resource tree vs the spec route table", () => {
         "events.list",
         "agentPayments.list",
         "testHelpers.paymentAttempts.advance",
+        "paymentIntents.create",
+        "paymentIntents.review",
+        "refunds.create",
+        "refunds.retrieve",
+        "refunds.list",
+        "refunds.prepare",
+        "refunds.submitTx",
+        "refunds.cancel",
+        "paymentLinks.create",
+        "paymentLinks.retrieve",
+        "paymentLinks.list",
+        "paymentLinks.update",
+        "customers.create",
+        "customers.retrieve",
+        "customers.list",
+        "customers.update",
+        "customers.del",
+        "webhookEndpoints.rotateSecret",
+        "events.resend",
+        "testHelpers.refunds.simulateDeposit",
       ]),
     );
+  });
+
+  it("leaves session-only and payer routes unbound (API keys, account, KYB, team, refund recipient override)", () => {
+    const boundIds = new Set(bound.map((b) => b.route.id));
+    const unbound = PUBLIC_ROUTES.filter((r) => !boundIds.has(r.id));
+    for (const r of unbound) {
+      expect(keyCallable(r), r.id).toBe(false);
+    }
+    for (const id of ["createApiKey", "listApiKeys", "getAccount", "getKyb", "updateRefundRecipient"]) {
+      expect(boundIds.has(id), id).toBe(false);
+    }
   });
 
   it("refuses routes with several path parameters", () => {
@@ -132,7 +166,7 @@ describe("method types come from the spec schemas", () => {
     void (() => np.webhookEndpoints.listDeliveries());
   });
 
-  it("returns responses as received: unknown open-enum values are kept, never rejected (LLD §1)", async () => {
+  it("keeps unknown open-enum values verbatim (tolerant parsing) and lists them on lastResponse", async () => {
     const body = {
       object: "list",
       data: [{ id: "whd_1", object: "webhook_delivery", status: "quarantined", attempts: 1 }],
@@ -142,6 +176,7 @@ describe("method types come from the spec schemas", () => {
     const seen: string[] = [];
     const np = new NearPay("sk_test_abc", {
       baseUrl: "https://api.nearpay.localhost",
+      onValidationIssue: () => {},
       fetch: async (url) => {
         seen.push(String(url));
         return new Response(JSON.stringify(body), { status: 200 });
@@ -150,6 +185,7 @@ describe("method types come from the spec schemas", () => {
     const page = await np.webhookEndpoints.listDeliveries("we_1", { limit: 5 });
     expect(page).toEqual(body);
     expect(page.data[0]?.status as string).toBe("quarantined");
+    expect(page.lastResponse?.validationIssues.length).toBeGreaterThan(0); // the minimal body lacks required fields
     expect(seen).toEqual(["https://api.nearpay.localhost/v1/webhook_endpoints/we_1/deliveries?limit=5"]);
   });
 });
@@ -244,5 +280,51 @@ describe("typed errors", () => {
     const e = new NearPayError({ message: "x" });
     expect(e).toMatchObject({ type: "api_error", headers: {}, message: "x" });
     expect(new NearPayError({ message: "y", cause: new Error("z") }).cause).toBeInstanceOf(Error);
+  });
+});
+
+describe("Stage 2 method types", () => {
+  it("types list queries: grouped ranges, metadata filters, flat keys; list results are ListPromises", () => {
+    const np = new NearPay("sk_test_types", { fetch: async () => new Response("{}") });
+    type Q = NonNullable<Parameters<typeof np.paymentIntents.list>[0]>;
+    expectTypeOf<Q["metadata"]>().toEqualTypeOf<Readonly<Record<string, string>> | undefined>();
+    expectTypeOf<NonNullable<Q["amount"]>["gte"]>().toEqualTypeOf<string | undefined>();
+    expectTypeOf<NonNullable<Q["created"]>["gte"]>().toEqualTypeOf<number | undefined>();
+    expectTypeOf<Q["created[gte]"]>().toEqualTypeOf<number | undefined>();
+    type RQ = NonNullable<Parameters<typeof np.refunds.list>[0]>;
+    // @ts-expect-error metadata filters exist only where the spec declares them
+    void ((q: RQ) => q.metadata);
+    const listed = np.refunds.list();
+    listed.catch(() => {});
+    expectTypeOf(listed.autoPagingToArray).returns.resolves.items.toHaveProperty("next_action");
+    type Created = Awaited<ReturnType<typeof np.paymentIntents.create>>;
+    expectTypeOf<Created["client_secret"]>().toBeString();
+    type Body = Parameters<typeof np.refunds.submitTx>[1];
+    void ((b: Body) => b);
+    void (() => np.refunds.submitTx("re_x", { tx_hash: "0x1234567890" }));
+    // @ts-expect-error submit_tx takes a tx hash or a signed intent
+    void (() => np.refunds.submitTx("re_x", { hash: "0x" }));
+    void (() => np.webhookEndpoints.rotateSecret("we_x"));
+    void (() => np.events.resend("evt_x"));
+    void (() => np.customers.del("cus_x"));
+    void (() => np.testHelpers.refunds.simulateDeposit("re_x"));
+    expectTypeOf(np.refunds.signers.signAndSubmit).toBeFunction();
+  });
+});
+
+describe("restricted keys", () => {
+  it("knows the scope of every method", () => {
+    expect(restrictedKeyScope("refunds.create")).toBe("refunds.write");
+    expect(restrictedKeyScope("paymentIntents.list")).toBe("payment_intents.read");
+    expect(restrictedKeyScope("testHelpers.paymentAttempts.advance")).toBeNull();
+    expect(restrictedKeyScope("assets.list")).toBeNull();
+    expect(() => restrictedKeyScope("nope.nope" as "assets.list")).toThrow(/unknown/);
+    expect(scopesFor(["refunds.create", "refunds.retrieve", "refunds.submitTx", "assets.list"])).toEqual([
+      "refunds.read",
+      "refunds.write",
+    ]);
+    expect(() => scopesFor(["testHelpers.refunds.simulateDeposit"])).toThrow(/secret key/);
+    expect(methodAccess().get("webhookSigningKeys.list")).toEqual({ scope: null, anonymous: true });
+    expect(methodAccess().size).toBe(routesOf(RESOURCES).length);
   });
 });

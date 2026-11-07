@@ -2,7 +2,7 @@
  * Contract test: every SDK method is called through a minimal gateway into the spec-driven mock of the
  * owning service (`mockPeer`). The mock validates path, query and body strictly against the route,
  * authorizes the secret-key principal from the route's `auth`, and validates every response against the
- * route's response schema; so a passing call proves the SDK's request matches `@nearpay/spec` 0.1.5.
+ * route's response schema; so a passing call proves the SDK's request matches `@nearpay/spec` 0.2.0.
  */
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -10,32 +10,52 @@ import {
   API_VERSION,
   advancePaymentAttempt,
   cancelPaymentIntent,
+  cancelRefund,
   createCheckoutSession,
+  createCustomer,
+  createPaymentIntent,
+  createPaymentLink,
+  createRefund,
   createWebhookEndpoint,
+  deleteCustomer,
   deleteWebhookEndpoint,
   Event,
   expireCheckoutSession,
   getAgentPayment,
   getCheckoutSession,
+  getCustomer,
   getEvent,
   getPaymentIntent,
+  getPaymentLink,
+  getRefund,
   getSettlementDestination,
   getWebhookEndpoint,
   listAgentPayments,
   listAssets,
   listBalanceTransactions,
   listCheckoutSessions,
+  listCustomers,
   listEvents,
   listPaymentIntents,
+  listPaymentLinks,
+  listRefunds,
   listSettlementDestinations,
   listWebhookEndpointDeliveries,
   listWebhookEndpoints,
   listWebhookSigningKeys,
   MultiPayload,
   PaymentRequired,
+  prepareRefund,
+  resendEvent,
+  reviewPaymentIntent,
+  rotateWebhookEndpointSecret,
   SettleResponse,
   SupportedResponse,
+  simulateRefundDeposit,
+  submitRefundTx,
   testWebhookEndpoint,
+  updateCustomer,
+  updatePaymentLink,
   updateWebhookEndpoint,
   VerifyResponse,
   WebhookDelivery,
@@ -58,6 +78,17 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { NearPay, NearPayInvalidRequestError, NearPayStateConflictError } from "../../src/index.js";
 import { routesOf } from "../../src/resources/bind.js";
 import { RESOURCES } from "../../src/resources/routes.js";
+import {
+  createdPaymentIntent,
+  customer,
+  deletedCustomer,
+  eventResend,
+  ids,
+  paymentLink,
+  refund,
+  signIntentAction,
+  webhookEndpoint,
+} from "../support/fixtures.js";
 import { ACCOUNT, type Gateway, startGateway } from "../support/gateway.js";
 
 const require = createRequire(import.meta.url);
@@ -380,6 +411,80 @@ describe("destinations and assets", () => {
   });
 });
 
+describe("stage 2 (spec 0.2.0)", () => {
+  it("payment intents: create (headless) with ADR-0018 list filters and review", async () => {
+    const p = gw.peer("payments");
+    p.on(createPaymentIntent, async () => createdPaymentIntent());
+    p.on(reviewPaymentIntent, async () => paymentIntent({ status: "requires_payment" }));
+    p.on(listPaymentIntents, async () => list("/v1/payment_intents", [paymentIntent()]));
+    expect(
+      (await np.paymentIntents.create({ amount: 4999, currency: "usd", return_url: "https://m.example/r" }))
+        .client_secret,
+    ).toMatch(/_secret_/);
+    await np.paymentIntents.review(ids.pi, { decision: "reject", reason: "short" });
+    await np.paymentIntents.list({
+      amount: { gte: "100" },
+      created: { gte: 1 },
+      customer: ids.cus,
+      metadata: { order_id: "42" },
+    });
+    expect(p.callsTo(listPaymentIntents)[0]?.query).toMatchObject({ "amount[gte]": "100", "metadata[order_id]": "42" });
+  });
+
+  it("refunds: create, retrieve, list, prepare, submit_tx, cancel, simulate deposit", async () => {
+    const p = gw.peer("payments");
+    const r = refund({ next_action: signIntentAction({ signerId: "merchant.near" }) });
+    for (const route of [createRefund, getRefund, prepareRefund, submitRefundTx, cancelRefund])
+      p.on(route, async () => r);
+    p.on(listRefunds, async () => list("/v1/refunds", [r]));
+    p.on(simulateRefundDeposit, async () => undefined);
+    await np.refunds.create({ payment_intent: ids.pi, amount: "2000000" });
+    await np.refunds.retrieve(r.id);
+    await np.refunds.list({ status: "requires_action" });
+    await np.refunds.prepare(r.id);
+    await np.refunds.submitTx(r.id, { signed_intent: MultiPayload.parse(vectors.nep413.multipayload) });
+    await np.refunds.cancel(r.id);
+    await np.testHelpers.refunds.simulateDeposit(r.id);
+    expect(p.callsTo(submitRefundTx)[0]?.idempotencyKey).toBeDefined();
+  });
+
+  it("payment links and customers", async () => {
+    const p = gw.peer("payments");
+    p.on(createPaymentLink, async () => paymentLink());
+    p.on(getPaymentLink, async () => paymentLink());
+    p.on(listPaymentLinks, async () => list("/v1/payment_links", [paymentLink()]));
+    p.on(updatePaymentLink, async () => paymentLink({ active: false }));
+    p.on(createCustomer, async () => customer());
+    p.on(getCustomer, async () => customer());
+    p.on(listCustomers, async () => list("/v1/customers", [customer()]));
+    p.on(updateCustomer, async () => customer());
+    p.on(deleteCustomer, async () => deletedCustomer());
+    await np.paymentLinks.create({ amount: 2500, currency: "usd", description: "T-shirt" });
+    await np.paymentLinks.retrieve(ids.plink);
+    await np.paymentLinks.list({ active: true });
+    await np.paymentLinks.update(ids.plink, { active: false });
+    await np.customers.create({ email: "ada@example.com" });
+    await np.customers.retrieve(ids.cus);
+    await np.customers.list({ email: "ada@example.com" });
+    await np.customers.update(ids.cus, { name: "Ada" });
+    expect((await np.customers.del(ids.cus)).deleted).toBe(true);
+  });
+
+  it("webhooks: rotate secret and resend", async () => {
+    const w = gw.peer("webhooks");
+    w.on(rotateWebhookEndpointSecret, async () => ({
+      ...webhookEndpoint(),
+      secret: `whsec_${"c".repeat(32)}`,
+      previous_secret_expires_at: now() + 60,
+    }));
+    w.on(resendEvent, async () => eventResend());
+    expect((await np.webhookEndpoints.rotateSecret(ids.we, { expire_previous_in_seconds: 60 })).secret).toMatch(
+      /^whsec_/,
+    );
+    expect((await np.events.resend(ids.evt)).deliveries).toHaveLength(1);
+  });
+});
+
 it("covers every bound route in the cases above", () => {
   const ids = routesOf(RESOURCES).map((b) => b.route.id);
   const covered = [
@@ -411,6 +516,26 @@ it("covers every bound route in the cases above", () => {
     listSettlementDestinations,
     getSettlementDestination,
     listAssets,
+    createPaymentIntent,
+    reviewPaymentIntent,
+    createRefund,
+    getRefund,
+    listRefunds,
+    prepareRefund,
+    submitRefundTx,
+    cancelRefund,
+    simulateRefundDeposit,
+    createPaymentLink,
+    getPaymentLink,
+    listPaymentLinks,
+    updatePaymentLink,
+    createCustomer,
+    getCustomer,
+    listCustomers,
+    updateCustomer,
+    deleteCustomer,
+    rotateWebhookEndpointSecret,
+    resendEvent,
   ].map((r) => r.id);
   expect(new Set(ids)).toEqual(new Set(covered));
 });

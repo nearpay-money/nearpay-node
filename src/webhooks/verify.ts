@@ -1,44 +1,54 @@
 /**
- * Webhook signature verification (lld/sdks-and-tools.md §1, lld/webhooks.md §6, api-conventions §9).
+ * Webhook signature verification (lld/sdks-and-tools.md §1, lld/webhooks.md §5–§6, api-conventions §9).
  *
- *   NearPay-Signature: t=<unix>,v1=<hex HMAC-SHA256>[,v1=<hex, secondary secret>],v1a=<base64url Ed25519>,kid=<kid>
+ *   NearPay-Signature: t=<unix>,v1=<hex HMAC-SHA256>[,v1=<hex, previous secret>],v1a=<base64url Ed25519>,kid=<kid>
  *
  * Both signatures cover the UTF-8 bytes of `<t>.<raw body>`. Receivers must pass the raw body bytes
  * exactly as received (not re-serialised JSON). HMAC comparisons are constant-time; the timestamp
  * must be within the tolerance (300 s by default) of the receiver's clock.
+ *
+ * **Secret rotation** (`webhookEndpoints.rotateSecret`): during the overlap NearPay signs every
+ * delivery with both the new and the previous secret (two `v1=`), so a receiver configured with
+ * either secret verifies. Configure the new secret and keep the previous one with its expiry —
+ * `[newSecret, {secret: oldSecret, expiresAt: endpoint.previous_secret_expires_at}]` — and both are
+ * accepted until `expiresAt`, only the new one afterwards.
+ *
+ * The verified payload is parsed tolerantly into a `TypedEvent` (`data.object` typed by `type`);
+ * events of types this SDK does not know yet are returned with their envelope checked.
  */
 import { createHmac, createPublicKey, verify as cryptoVerify, timingSafeEqual } from "node:crypto";
 import {
-  type Event,
+  Event,
   formatSignatureHeader,
   type ParsedSignatureHeader,
   parseSignatureHeader,
+  type TypedEvent,
   WEBHOOK_TOLERANCE_SECONDS,
-  type WEBHOOK_TYPES,
+  type WebhookObjectOf,
   type WebhookType,
 } from "@nearpay/spec";
-import type { z } from "zod";
-import { NearPaySignatureVerificationError } from "../http/errors.js";
+import { NearPayResponseValidationError, NearPaySignatureVerificationError } from "../http/errors.js";
+import { describeIssues, parseTolerantBody, type ResponseValidation, type ValidationIssue } from "../http/parse.js";
 
-/** The object a webhook type carries (`payment_intent.succeeded` → PaymentIntent), from `WEBHOOK_TYPES`. */
-export type WebhookObject<T extends WebhookType> = z.output<(typeof WEBHOOK_TYPES)[T]["object"]>;
+/** The object a webhook type carries (`payment_intent.succeeded` → PaymentIntent); the spec's `WebhookObjectOf`. */
+export type WebhookObject<T extends WebhookType> = WebhookObjectOf<T>;
 
 /**
- * A webhook event whose `data.object` is typed by `type` (the spec's `Event` types it as `unknown`).
- * Narrow with `if (event.type === "payment_intent.succeeded") event.data.object.amount_settled`.
- * New types may arrive without a new API version: handle unknown `type`s gracefully.
+ * A webhook event whose `data.object` is typed by `type` — the spec's `TypedEvent` (0.2.0).
+ * Narrow with `if (event.type === "refund.succeeded") event.data.object.amount_received`.
+ * New types may arrive without a new API version: keep a `default` branch.
  */
-export type NearPayEvent = {
-  [T in WebhookType]: Omit<Event, "type" | "data"> & {
-    readonly type: T;
-    readonly data: { readonly object: WebhookObject<T>; readonly previous_attributes?: Record<string, unknown> };
-  };
-}[WebhookType];
+export type NearPayEvent = TypedEvent;
 
 /** The raw request body as received: a string or the bytes (`Buffer`, `Uint8Array`). */
 export type RawBody = string | Uint8Array;
-/** An endpoint signing secret (`whsec_…`), or several (during rotation any may match). */
-export type WebhookSecret = string | readonly string[];
+/** A secret that stops being accepted at `expiresAt` (unix seconds; `previous_secret_expires_at`). */
+export interface WebhookSecretEntry {
+  readonly secret: string;
+  readonly expiresAt?: number | null | undefined;
+}
+/** An endpoint signing secret (`whsec_…`), or several (during a rotation overlap any may match). */
+export type WebhookSecret = string | WebhookSecretEntry | readonly (string | WebhookSecretEntry)[];
 
 /** An Ed25519 public key of the JWKS at `GET /v1/webhook_signing_keys`. */
 export interface WebhookSigningJwk {
@@ -56,6 +66,14 @@ export interface VerifyOptions {
   readonly toleranceSec?: number;
   /** Current unix time in seconds (tests); default the system clock. */
   readonly now?: number;
+  /**
+   * How the verified payload is checked against the spec (`constructEvent` only): `"tolerant"`
+   * (default; a payload that does not match is returned as parsed JSON and reported to
+   * `onValidationIssue`), `"strict"` (throws `NearPayResponseValidationError`) or `"off"`.
+   */
+  readonly validation?: ResponseValidation;
+  /** Called when the payload does not match the spec in `"tolerant"` mode. */
+  readonly onValidationIssue?: (issues: readonly ValidationIssue[]) => void;
 }
 
 function bodyBytes(rawBody: unknown): Buffer {
@@ -90,12 +108,17 @@ function parseAndCheckTime(
   return parsed;
 }
 
-function secretsOf(secret: WebhookSecret): string[] {
-  const list = typeof secret === "string" ? [secret] : [...secret];
-  if (list.length === 0 || list.some((s) => typeof s !== "string" || s.length === 0)) {
+function secretsOf(secret: WebhookSecret, now: number): string[] {
+  const list: readonly unknown[] = Array.isArray(secret) ? secret : [secret];
+  const entries = list.map((s) => (typeof s === "string" ? { secret: s } : (s as WebhookSecretEntry | null)));
+  if (entries.length === 0 || entries.some((e) => !e || typeof e.secret !== "string" || e.secret.length === 0)) {
     throw new NearPaySignatureVerificationError("a webhook signing secret (whsec_…) is required");
   }
-  return list;
+  const live = (entries as WebhookSecretEntry[])
+    .filter((e) => e.expiresAt === undefined || e.expiresAt === null || now <= e.expiresAt)
+    .map((e) => e.secret);
+  if (live.length === 0) throw new NearPaySignatureVerificationError("every configured webhook secret has expired");
+  return live;
 }
 
 /** hex(HMAC-SHA256(key = UTF-8 secret incl. `whsec_`, msg = `<t>.` + raw body bytes)). */
@@ -117,7 +140,7 @@ export function constructEvent(
   options: VerifyOptions = {},
 ): NearPayEvent {
   const bytes = bodyBytes(rawBody);
-  const secrets = secretsOf(secret);
+  const secrets = secretsOf(secret, options.now ?? Math.floor(Date.now() / 1000));
   const parsed = parseAndCheckTime(signatureHeader, options);
   const candidates = parsed.v1.map((s) => Buffer.from(s, "hex"));
   let matched = false;
@@ -127,11 +150,36 @@ export function constructEvent(
     for (const c of candidates) if (c.length === expected.length && timingSafeEqual(c, expected)) matched = true;
   }
   if (!matched) throw new NearPaySignatureVerificationError("no v1 signature matches the expected signature");
+  let json: unknown;
   try {
-    return JSON.parse(bytes.toString("utf8")) as NearPayEvent;
+    json = JSON.parse(bytes.toString("utf8"));
   } catch {
     throw new NearPaySignatureVerificationError("the signed payload is not valid JSON");
   }
+  return parseEvent(json, options);
+}
+
+/**
+ * Checks an event object (a verified webhook payload, or an event you stored) against the spec:
+ * tolerant of new open-enum values and new event types (see `VerifyOptions.validation`).
+ */
+export function parseEvent(
+  json: unknown,
+  options: Pick<VerifyOptions, "validation" | "onValidationIssue"> = {},
+): NearPayEvent {
+  const mode = options.validation ?? "tolerant";
+  if (mode === "off") return json as NearPayEvent;
+  const outcome = parseTolerantBody(Event, json);
+  if (outcome.ok) return outcome.data as NearPayEvent;
+  if (mode === "strict") {
+    throw new NearPayResponseValidationError({
+      message: `the event does not match @nearpay/spec: ${describeIssues(outcome.issues)}`,
+      raw: json,
+      issues: outcome.issues,
+    });
+  }
+  options.onValidationIssue?.(outcome.issues);
+  return json as NearPayEvent;
 }
 
 function keysOf(jwks: WebhookJwks): readonly WebhookSigningJwk[] {
@@ -176,19 +224,24 @@ export function verifyEd25519(
   throw new NearPaySignatureVerificationError("the v1a signature does not verify with the signing keys");
 }
 
-/** Builds a valid `NearPay-Signature` header for a payload (for your own webhook handler tests). */
+/**
+ * Builds a valid `NearPay-Signature` header for a payload (for your own webhook handler tests).
+ * Pass several secrets to get one `v1=` per secret, as NearPay sends during a rotation overlap.
+ */
 export function generateTestHeaderString(o: {
   readonly payload: RawBody;
-  readonly secret: string;
+  readonly secret: string | readonly string[];
   readonly timestamp?: number;
 }): string {
   const timestamp = o.timestamp ?? Math.floor(Date.now() / 1000);
-  return formatSignatureHeader({ timestamp, v1: [computeV1Signature(o.secret, timestamp, o.payload)] });
+  const secrets = typeof o.secret === "string" ? [o.secret] : [...o.secret];
+  return formatSignatureHeader({ timestamp, v1: secrets.map((s) => computeV1Signature(s, timestamp, o.payload)) });
 }
 
 /** `nearpay.webhooks` (also usable without a client: `import { webhooks } from "@nearpay/node"`). */
 export const webhooks = Object.freeze({
   constructEvent,
+  parseEvent,
   verifyEd25519,
   generateTestHeaderString,
   computeV1Signature,
