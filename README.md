@@ -2,14 +2,14 @@
 
 > Server SDK for Node/TypeScript: typed resources, automatic idempotency keys and retries, webhook signature verification, refund signing helpers.
 
-|                                       |                    |
-| ------------------------------------- | ------------------ |
-| Group                                 | SDKs & tools       |
-| Kind                                  | library            |
-| Ships as                              | npm: @nearpay/node |
-| Owns                                  | Public SDK         |
-| Depends on (published artifacts only) | spec (public)      |
-| First built in                        | Stage 1 (step 1.3) |
+|                                       |                                                |
+| ------------------------------------- | ---------------------------------------------- |
+| Group                                 | SDKs & tools                                   |
+| Kind                                  | library                                        |
+| Ships as                              | npm: @nearpay/node                             |
+| Owns                                  | Public SDK                                     |
+| Depends on (published artifacts only) | spec (public)                                  |
+| First built in                        | Stage 1 (step 1.3); full in Stage 2 (step 2.3) |
 
 ## Documentation
 
@@ -31,59 +31,137 @@ const nearpay = new NearPay(process.env.NEARPAY_SECRET_KEY!, {
   baseUrl: "https://api.nearpay.localhost", // default https://api.nearpay.money
 });
 
-// POSTs carry an automatic Idempotency-Key (UUIDv4) reused across the SDK's own retries;
-// pass your own to make a retry of *your* request safe too.
+// POSTs (and idempotent PATCHes) carry an automatic Idempotency-Key (UUIDv4) reused across the
+// SDK's own retries; pass your own to make a retry of *your* request safe too.
 const session = await nearpay.checkout.sessions.create(
-  { amount: 200, currency: "usd", success_url: "https://shop.example/thanks" },
+  { amount: 200, currency: "usd", success_url: "https://shop.example/thanks", customer: "cus_…" },
   { idempotencyKey: `order-${orderId}` },
 );
 redirect(session.url);
 
+// Custom payer UI: a headless intent; its client_secret is returned once (give it to @nearpay/js).
+const { client_secret } = await nearpay.paymentIntents.create({ amount: 4999, currency: "usd", return_url });
+
+// Lists: await one page, or iterate every page (cursor pagination, filters kept). ADR-0018 filters:
+// ranges flat ("created[gte]") or grouped, metadata[key] filters as an object.
+for await (const pi of nearpay.paymentIntents.list({
+  status: "succeeded",
+  created: { gte: since },
+  amount: { gte: "1000" },
+  metadata: { order_id: "42" },
+})) {
+  console.log(pi.id, pi.amount_settled);
+}
+const last50 = await nearpay.refunds.list({ payment_intent: pi.id }).autoPagingToArray({ limit: 50 });
+
 // Webhooks: verify the raw body bytes exactly as received.
 try {
   const event = nearpay.webhooks.constructEvent(rawBody, req.headers["nearpay-signature"], process.env.NEARPAY_WEBHOOK_SECRET!);
-  if (event.type === "payment_intent.succeeded") fulfil(event.data.object.id); // typed by `type`
+  switch (event.type) {
+    case "payment_intent.succeeded": fulfil(event.data.object.id); break; // data.object typed by `type`
+    case "refund.succeeded": notify(event.data.object.amount_received); break;
+    default: break; // new types arrive without a new API version
+  }
 } catch (e) {
   if (e instanceof NearPaySignatureVerificationError) return res.status(400).end();
   throw e;
 }
 ```
 
-| Resource                      | Methods (spec route)                                                    |
-| ----------------------------- | ----------------------------------------------------------------------- |
-| `checkout.sessions`           | `create`, `retrieve(id, {expand})`, `list`, `expire(id)`                |
-| `paymentIntents`              | `retrieve(id)`, `list`, `cancel(id, {cancellation_reason})`             |
-| `balanceTransactions`         | `list`                                                                  |
-| `settlementDestinations`      | `retrieve(id)`, `list`                                                  |
-| `webhookEndpoints`            | `create`, `retrieve`, `list`, `update`, `del`, `test`, `listDeliveries` |
-| `events`                      | `retrieve(id)`, `list`                                                  |
-| `webhookSigningKeys`          | `list` (JWKS for `verifyEd25519`)                                       |
-| `agentPayments`               | `retrieve(id)`, `list`                                                  |
-| `x402`                        | `supported`, `requirements`, `verify`, `settle`                         |
-| `assets`                      | `list`                                                                  |
-| `testHelpers.paymentAttempts` | `advance(attemptId, {to})` (test mode)                                  |
+### Resources
 
-Every method is bound from a route of `@nearpay/spec` (`src/resources/routes.ts`); arguments and results
-are typed from the route's zod schemas. Shape: `(pathParam?, bodyOrQuery?, options?)` where `options` is
-`{idempotencyKey?, timeoutMs?, maxRetries?, signal?, apiVersion?}`. Results carry a non-enumerable
-`lastResponse` (`requestId`, `idempotentReplayed`, `attempts`, headers).
+| Resource                 | Methods (spec route)                                                                                                                 |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `checkout.sessions`      | `create`, `retrieve(id, {expand})`, `list`, `expire(id)`                                                                             |
+| `paymentIntents`         | `create` (headless, returns `client_secret`), `retrieve`, `list` (ADR-0018 filters + `metadata`), `cancel`, `review(id, {decision})` |
+| `refunds`                | `create`, `retrieve`, `list`, `prepare(id)`, `submitTx(id, {tx_hash} \| {signed_intent})`, `cancel(id)`; `signers` (below)           |
+| `paymentLinks`           | `create`, `retrieve`, `list({active})`, `update` (no delete: deactivate)                                                             |
+| `customers`              | `create`, `retrieve`, `list({email})`, `update`, `del`                                                                               |
+| `balanceTransactions`    | `list` (incl. `refund` filter)                                                                                                       |
+| `settlementDestinations` | `retrieve(id)`, `list`                                                                                                               |
+| `webhookEndpoints`       | `create`, `retrieve`, `list`, `update`, `del`, `test`, `listDeliveries`, `rotateSecret(id, {expire_previous_in_seconds})`            |
+| `events`                 | `retrieve(id)`, `list`, `resend(id, {endpoint?})`                                                                                    |
+| `webhookSigningKeys`     | `list` (JWKS for `verifyEd25519`)                                                                                                    |
+| `agentPayments`          | `retrieve(id)`, `list`                                                                                                               |
+| `x402`                   | `supported`, `requirements`, `verify`, `settle`                                                                                      |
+| `assets`                 | `list`                                                                                                                               |
+| `testHelpers`            | `paymentAttempts.advance(attemptId, {to})`, `refunds.simulateDeposit(refundId)` (test mode, secret key)                              |
 
-**Transport** (LLD §1): per-attempt timeout 30 s; up to 2 retries on network errors, 409
-`idempotency_in_progress`, 429 and 5xx with exponential backoff and jitter (honouring `Retry-After`);
-`NearPay-Version` pinned per client (default: the spec's current version).
+Every method is bound from a route of `@nearpay/spec` 0.2.0 (`src/resources/routes.ts`); arguments and
+results are typed from the route's zod schemas. Shape: `(pathParam?, bodyOrQuery?, options?)` where
+`options` is `{idempotencyKey?, timeoutMs?, maxRetries?, signal?, apiVersion?}`. Results carry a
+non-enumerable `lastResponse` (`requestId`, `idempotencyKey`, `idempotentReplayed`, `attempts`, headers,
+`unknownEnumValues`, `validationIssues`). List methods return a `ListPromise`: `await` → one page;
+`for await` → every item; `autoPagingToArray({limit})`, `autoPagingEach(fn)` (return `false` to stop).
+
+**Not in the SDK** (the spec allows only a dashboard session for them): API keys (incl. restricted keys),
+account, KYB, team and invitations, settlement-destination writes, and `refunds/{id}/recipient` (owner +
+step-up, INV-7). Payer routes (`client_secret`, payment-link `…/public`) belong to `@nearpay/js`.
+
+**Restricted keys** (`rk_…`, created in the dashboard) work like secret keys for the methods their scopes
+allow: `restrictedKeyScope("refunds.create")` → `"refunds.write"`, `scopesFor([...methods])` lists what a
+least-privilege key needs, and a `403` carries `error.requiredScope`.
+
+### Refund signing (`nearpay.refunds.signers`)
+
+NearPay never holds your funds: a refund leg's `next_action` is what **you** sign with the wallet behind
+the settlement destination; NearPay only relays it. The helpers sign exactly that payload, after checking
+that it encodes the one transfer the action displays (receiver, asset, amount, memo, deadline), that an
+`intents_transfer` refund goes to the payer's recorded account, that the current leg is unsubmitted and
+its amount matches, and that the deadline is ahead — they never build another recipient or amount.
+
+```ts
+// Intents-account destination (`sign_intent`): a NEAR KeyPair (NEP-413 / raw ed25519) or a viem Account (ERC-191)
+const signer = nearpay.refunds.signers.nearKeyPair(KeyPair.fromString(process.env.NEAR_PRIVATE_KEY!));
+// const signer = nearpay.refunds.signers.evmAccount(privateKeyToAccount(process.env.EVM_KEY!));
+await nearpay.refunds.signers.signAndSubmit(refund.id, signer);
+
+// Chain-address destination (`sign_and_send`): a viem WalletClient (native / ERC-20), or your own sender
+await nearpay.refunds.signers.signAndSubmit(refund.id, nearpay.refunds.signers.evmWallet(walletClient));
+await nearpay.refunds.signers.signAndSubmit(refund.id, { send: async (t) => ({ txHash: await mySend(t) }) });
+```
+
+Also: `check(refund)` (validation only), `signIntent(refund, signer)` → `{signed_intent}`,
+`chainTransfer(action)`, `evmTransferRequest(transfer)`. Refusals are `NearPayRefundSigningError` (`code`:
+`no_action`, `already_submitted`, `payload_mismatch`, `recipient_mismatch`, `deadline_passed`,
+`signer_mismatch`, `wrong_signer`, `unsupported_chain`). `submit_failed` means the transfer **was
+broadcast** but reporting it failed: do not send again; report `error.txHash` with `refunds.submitTx`.
+No runtime dependency: signers are structural (`{sign, getPublicKey}`, `{address, signMessage}`,
+`{account, getChainId, sendTransaction}`). Named NEAR accounts and ERC-191 signatures are verified by
+NearPay and the Verifier before relaying (implicit-account keys and ed25519 signatures are checked locally).
+
+### Transport, retries, parsing
+
+- Per-attempt timeout 30 s; `NearPay-Version` pinned per client (default: the spec's current version).
+- Up to 2 retries with exponential backoff and jitter, `Retry-After` honoured up to the 8 s cap — only
+  where repeating cannot apply a request twice (api-conventions §4–§6): 429 and 409
+  `idempotency_in_progress` (not processed) and connections refused before sending, always; 5xx,
+  timeouts, dropped connections and cut-off bodies only for GET, DELETE and routes that honour the
+  Idempotency-Key. Catalogue codes marked non-retryable (`too_many_attempts`) are never retried; the
+  x402 facilitator POSTs (not idempotent) are not repeated after the server may have acted.
+- Responses are parsed with the spec schemas via `safeParseTolerant`: new open-enum values and new event
+  types are kept (listed in `lastResponse.unknownEnumValues`). `responseValidation` decides what happens
+  to a body that breaks the contract: `"tolerant"` (default) returns it as received and reports it
+  (`lastResponse.validationIssues`, `onValidationIssue`, else one process warning per route); `"strict"`
+  throws `NearPayResponseValidationError` (with the `idempotencyKey` for a replay-safe retry); `"off"`.
 
 **Errors:** every failure is a `NearPayError` subclass by envelope `type` — `NearPayInvalidRequestError`,
 `NearPayAuthenticationError`, `NearPayPermissionError`, `NearPayPaymentError`, `NearPayIdempotencyError`,
 `NearPayStateConflictError`, `NearPayRateLimitError`, `NearPayApiError`, `NearPayRailUnavailableError` —
-plus `NearPayConnectionError` (no response; `timedOut`) and `NearPaySignatureVerificationError`. Each has
-`code`, `statusCode`, `param`, `docUrl` and `requestId`.
+plus `NearPayConnectionError` (no response; `timedOut`), `NearPayResponseValidationError`,
+`NearPaySignatureVerificationError` and `NearPayRefundSigningError`. Each has `code` (`e.is("amount_exceeds_refundable")`),
+`statusCode`, `param`, `docUrl`, `requestId`, `retryable` (from the error catalogue) and `requiredScope`.
 
-**Webhooks:** `constructEvent(rawBody, header, secret | secrets[], {toleranceSec = 300})` verifies any of
-the `v1` HMACs (constant-time; several secrets during rotation); `verifyEd25519(rawBody, header, jwks)`
-verifies `v1a` against `webhookSigningKeys.list()`; `generateTestHeaderString({payload, secret})` signs
-payloads for your own tests. Both work without a client: `import { webhooks } from "@nearpay/node"`.
+**Webhooks:** `constructEvent(rawBody, header, secrets, {toleranceSec = 300, validation})` verifies any of
+the `v1` HMACs (constant-time) and returns a `TypedEvent`. **Secret rotation:** after
+`webhookEndpoints.rotateSecret`, NearPay signs with both secrets until `previous_secret_expires_at`;
+configure `[newSecret, {secret: oldSecret, expiresAt: endpoint.previous_secret_expires_at}]` and both are
+accepted in the window, only the new one afterwards. `verifyEd25519(rawBody, header, jwks)` verifies
+`v1a` against `webhookSigningKeys.list()`; `parseEvent(json)` checks a stored event;
+`generateTestHeaderString({payload, secret | secrets})` signs payloads for your own tests (several secrets
+= a rotation delivery). All work without a client: `import { webhooks } from "@nearpay/node"`.
 
-More: `examples/checkout.ts`, `examples/webhook-server.ts`.
+More: `examples/checkout.ts`, `examples/refund.ts`, `examples/webhook-server.ts`.
 
 ## Install (local registry)
 
@@ -103,9 +181,13 @@ pnpm verify          # typecheck + Biome + unit tests (coverage ≥ 90% branches
 NP_REGISTRY_PASSWORD=$(cat ../nearpay-deploy/.secrets/registry_password) pnpm release:local   # publish to 127.0.0.1:4873
 ```
 
-- `test/unit` — transport against a scripted local HTTP server (retries, idempotency-key reuse, timeouts,
-  aborts), typed errors, resource tree vs `PUBLIC_ROUTES` (a new key-callable Stage 1 route fails the
-  build until bound), webhook verification against `@nearpay/spec/test-vectors/webhook-signatures.json`.
+- `test/unit` — every resource method against `test/support/spec-mock.ts`, an in-process mock that
+  checks credentials, headers, Idempotency-Key, params/query/body strictly against the spec routes, replays
+  stored idempotent responses and validates its own answers against the response schemas; transport
+  against a scripted HTTP server (retry policy per route kind, key reuse, timeouts, aborts); tolerant
+  parsing; auto-pagination; refund signers against `@nearpay/spec/test-vectors/intents-payloads.json`;
+  webhook verification (incl. rotation) against `webhook-signatures.json`; resource tree vs
+  `PUBLIC_ROUTES` (a new key-callable route fails the build until bound).
 - `test/contract` — every bound route called through a minimal gateway into the spec-driven service mocks
   (`mockPeer`), which validate requests strictly and responses against the spec.
 - `scripts/release-local.mjs` publishes a reproducible tarball to the loopback registry only (refuses any
@@ -113,8 +195,8 @@ NP_REGISTRY_PASSWORD=$(cat ../nearpay-deploy/.secrets/registry_password) pnpm re
 
 ## Status
 
-Stage 1 subset done (step 1.3): resources above, transport, webhooks, typed errors. Stage 2: refunds with
-`refunds.signers`, payment links, customers; Stage 3: billing resources.
+0.2.0 (Stage 2, step 2.3): the full SDK of `lld/sdks-and-tools.md` §1 for `@nearpay/spec` 0.2.0.
+Stage 3: billing resources (invoices, subscriptions, products, prices).
 
 ## Built with
 
@@ -122,4 +204,5 @@ Libraries are listed here as they are added (hackathon rule Q-005). Code and doc
 
 - Runtime: `@nearpay/spec` (contracts), `zod` (peer, via the spec); Node's built-in `fetch` and `crypto`
   (HMAC-SHA256, Ed25519, `timingSafeEqual`).
-- Development: TypeScript, Vitest (+ coverage-v8), Biome, `@nearpay-internal/testing` (spec-driven mocks).
+- Development: TypeScript, Vitest (+ coverage-v8), Biome, `@nearpay-internal/testing` (spec-driven mocks),
+  `@noble/curves` + `@noble/hashes` (test-only: an ERC-191 signer for the spec vectors).
