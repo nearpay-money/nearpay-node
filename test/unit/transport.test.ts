@@ -4,8 +4,12 @@ import {
   backoffMs,
   carriesIdempotencyKey,
   encodeQuery,
+  failedBeforeSending,
+  isReplaySafe,
   isRetryableStatus,
   parseRetryAfter,
+  restrictedScopeOf,
+  shouldRetryResponse,
   Transport,
 } from "../../src/http/transport.js";
 import {
@@ -28,8 +32,9 @@ const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f
 let srv: ScriptedServer;
 const waits: number[] = [];
 
+// Transport tests answer with minimal bodies; response parsing is covered in parse.test.ts.
 function client(extra: Record<string, unknown> = {}) {
-  return new NearPay(KEY, { baseUrl: srv.url, retryBaseMs: 1, retryMaxMs: 4, ...extra });
+  return new NearPay(KEY, { baseUrl: srv.url, retryBaseMs: 1, retryMaxMs: 4, onValidationIssue: () => {}, ...extra });
 }
 
 beforeAll(async () => {
@@ -153,7 +158,7 @@ describe("retries", () => {
 
   it("honours Retry-After on 429 (capped by retryMaxMs)", async () => {
     srv.push(json(429, envelope("rate_limit_error", "rate_limited"), { "retry-after": "1" }), json(200, { id: PI }));
-    const np = new NearPay(KEY, { baseUrl: srv.url, retryBaseMs: 1, retryMaxMs: 50 });
+    const np = new NearPay(KEY, { baseUrl: srv.url, retryBaseMs: 1, retryMaxMs: 50, onValidationIssue: () => {} });
     const started = Date.now();
     await np.paymentIntents.retrieve(PI);
     expect(Date.now() - started).toBeGreaterThanOrEqual(45);
@@ -288,6 +293,12 @@ describe("helpers", () => {
     expect(encodeQuery({})).toBe("");
     expect(encodeQuery({ a: null, b: undefined })).toBe("");
     expect(encodeQuery({ expand: ["x", "y"], limit: 3 })).toBe("?expand%5B%5D=x&expand%5B%5D=y&limit=3");
+    expect(decodeURIComponent(encodeQuery({ created: { gte: 1, lte: undefined }, metadata: { order: "4 2" } }))).toBe(
+      "?created[gte]=1&metadata[order]=4+2",
+    );
+    expect(decodeURIComponent(encodeQuery({ "amount[gte]": "5", amount: { lt: "9" } }))).toBe(
+      "?amount[gte]=5&amount[lt]=9",
+    );
   });
 
   it("carriesIdempotencyKey", () => {
@@ -297,13 +308,35 @@ describe("helpers", () => {
     expect(carriesIdempotencyKey({ method: "GET", idempotent: true })).toBe(false);
   });
 
-  it("isRetryableStatus", () => {
+  it("isRetryableStatus follows the catalogue's retryable flag, else 429/5xx", () => {
+    expect(isRetryableStatus(429, "too_many_attempts")).toBe(false);
+    expect(isRetryableStatus(409, "idempotency_key_reused")).toBe(false);
+    expect(isRetryableStatus(503, "screening_unavailable")).toBe(true);
+    expect(isRetryableStatus(409, "brand_new_code")).toBe(false);
+    expect(isRetryableStatus(502, "brand_new_code")).toBe(true);
     expect(isRetryableStatus(409, "idempotency_in_progress")).toBe(true);
     expect(isRetryableStatus(409, "state_conflict")).toBe(false);
     expect(isRetryableStatus(429, "rate_limited")).toBe(true);
     expect(isRetryableStatus(500, undefined)).toBe(true);
     expect(isRetryableStatus(503, "rail_unavailable")).toBe(true);
     expect(isRetryableStatus(400, "invalid_request")).toBe(false);
+  });
+
+  it("isReplaySafe / shouldRetryResponse / failedBeforeSending / restrictedScopeOf", () => {
+    expect(isReplaySafe({ method: "GET", idempotent: false })).toBe(true);
+    expect(isReplaySafe({ method: "DELETE", idempotent: false })).toBe(true);
+    expect(isReplaySafe({ method: "POST", idempotent: true })).toBe(true);
+    expect(isReplaySafe({ method: "POST", idempotent: false })).toBe(false);
+    const post = { method: "POST" as const, idempotent: false };
+    expect(shouldRetryResponse(post, 500, "api_error")).toBe(false);
+    expect(shouldRetryResponse(post, 429, "rate_limited")).toBe(true);
+    expect(shouldRetryResponse(post, 409, "idempotency_in_progress")).toBe(true);
+    expect(shouldRetryResponse({ method: "PATCH", idempotent: true }, 503, undefined)).toBe(true);
+    expect(failedBeforeSending(new TypeError("fetch failed", { cause: { code: "ECONNREFUSED" } }))).toBe(true);
+    expect(failedBeforeSending(new TypeError("fetch failed", { cause: { code: "ECONNRESET" } }))).toBe(false);
+    expect(failedBeforeSending(undefined)).toBe(false);
+    expect(restrictedScopeOf({ auth: ["secret_key", "restricted_key:refunds.write"] })).toBe("refunds.write");
+    expect(restrictedScopeOf({ auth: ["secret_key"] })).toBeUndefined();
   });
 
   it("parseRetryAfter", () => {
@@ -320,5 +353,85 @@ describe("helpers", () => {
     expect(backoffMs(0, 500, 8000, () => 0.999999)).toBe(500);
     expect(backoffMs(2, 500, 8000, () => 0)).toBe(1000);
     expect(backoffMs(10, 500, 8000, () => 0.999999)).toBe(8000);
+  });
+});
+
+describe("retry policy: only replay-safe requests are repeated after the server may have acted", () => {
+  const settleBody = {
+    x402Version: 2,
+    paymentPayload: { x402Version: 2, accepted: {}, payload: {} },
+    paymentRequirements: {},
+  } as unknown as Parameters<NearPay["x402"]["settle"]>[0];
+
+  it("does not repeat a non-idempotent POST (x402 settle) after a 5xx, a timeout, a dropped connection or a cut-off body", async () => {
+    const np = client({ timeoutMs: 80 });
+    srv.push(json(500, envelope("api_error", "api_error")));
+    await expect(np.x402.settle(settleBody)).rejects.toBeInstanceOf(NearPayApiError);
+    expect(srv.requests).toHaveLength(1);
+    srv.push(stall);
+    await expect(np.x402.settle(settleBody)).rejects.toMatchObject({ timedOut: true });
+    srv.push(hangUp);
+    await expect(np.x402.settle(settleBody)).rejects.toBeInstanceOf(NearPayConnectionError);
+    srv.push((_r, res) => {
+      res.writeHead(200, { "content-type": "application/json", "content-length": "100" });
+      res.write('{"success":');
+      setTimeout(() => res.socket?.destroy(), 10);
+    });
+    await expect(np.x402.settle(settleBody)).rejects.toThrow(/cut off/);
+    expect(srv.requests).toHaveLength(4);
+  });
+
+  it("repeats a non-idempotent POST when the server did not process it (429) or the connection was refused", async () => {
+    srv.push(json(429, envelope("rate_limit_error", "rate_limited")), json(200, { success: true }));
+    await client().x402.settle(settleBody);
+    expect(srv.requests).toHaveLength(2);
+    let calls = 0;
+    const refusing: typeof fetch = async (input, init) => {
+      calls++;
+      if (calls === 1)
+        throw new TypeError("fetch failed", { cause: Object.assign(new Error("refused"), { code: "ECONNREFUSED" }) });
+      return fetch(input, init);
+    };
+    srv.push(json(200, { success: true }));
+    await client({ fetch: refusing }).x402.settle(settleBody);
+    expect(calls).toBe(2);
+  });
+
+  it("retries DELETE and idempotent PATCH after 5xx; never retries catalogue codes marked non-retryable", async () => {
+    srv.push(json(503, envelope("api_error", "screening_unavailable")), empty(204));
+    await client().webhookEndpoints.del("we_01jbz9k3m4n5p6q7r8s9t0v1w2");
+    srv.push(json(502, {}), json(200, { id: "we_1" }));
+    await client().webhookEndpoints.update("we_01jbz9k3m4n5p6q7r8s9t0v1w2", { disabled: true });
+    expect(new Set(srv.requests.slice(2).map((r) => r.headers["idempotency-key"])).size).toBe(1);
+    srv.push(json(429, envelope("rate_limit_error", "too_many_attempts")));
+    await expect(client().paymentIntents.retrieve(PI)).rejects.toMatchObject({
+      code: "too_many_attempts",
+      retryable: false,
+    });
+    expect(srv.requests).toHaveLength(5);
+  });
+
+  it("marks errors retryable from the catalogue (connection errors always)", async () => {
+    srv.push(json(503, envelope("rail_unavailable", "rail_unavailable")));
+    const e = await client({ maxRetries: 0 })
+      .refunds.create({ payment_intent: PI })
+      .catch((x: unknown) => x);
+    expect(e).toMatchObject({ retryable: true, statusCode: 503 });
+    srv.push(hangUp);
+    const c = await client({ maxRetries: 0 })
+      .paymentIntents.retrieve(PI)
+      .catch((x: unknown) => x);
+    expect(c).toMatchObject({ retryable: true, type: "connection_error" });
+  });
+
+  it("reuses one automatic Idempotency-Key across retries of a refund create, replayed on success", async () => {
+    srv.push(
+      json(503, envelope("rail_unavailable", "rail_unavailable"), { "retry-after": "0" }),
+      json(201, { id: "re_1" }, { "idempotent-replayed": "true" }),
+    );
+    const r = await client().refunds.create({ payment_intent: PI, amount: "100" });
+    expect(new Set(srv.requests.map((x) => x.headers["idempotency-key"])).size).toBe(1);
+    expect(srv.requests[0]?.headers["idempotency-key"]).toMatch(UUID_V4);
+    expect(r.lastResponse).toMatchObject({ attempts: 2, idempotentReplayed: true });
   });
 });

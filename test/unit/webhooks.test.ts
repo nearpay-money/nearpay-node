@@ -10,10 +10,14 @@ import {
   constructEvent,
   generateTestHeaderString,
   NearPay,
+  NearPayResponseValidationError,
   NearPaySignatureVerificationError,
+  parseEvent,
+  type TypedEvent,
   verifyEd25519,
   webhooks,
 } from "../../src/index.js";
+import { event, publicReview, refund } from "../support/fixtures.js";
 
 interface Vector {
   secret: string;
@@ -195,7 +199,7 @@ describe("event typing", () => {
 });
 
 describe("open enums (api-conventions §5)", () => {
-  it("returns unknown event types and open-enum values verbatim (no response validation, LLD §1)", () => {
+  it("returns unknown event types and open-enum values verbatim (tolerant parsing)", () => {
     const payload = JSON.stringify({
       id: "evt_01jbz9k3m4n5p6q7r8s9t0v1w9",
       object: "event",
@@ -212,5 +216,94 @@ describe("open enums (api-conventions §5)", () => {
     const evt = constructEvent(payload, header, v.secret, { now });
     expect(evt.type as string).toBe("payment_intent.teleported");
     expect(evt.data.object).toMatchObject({ status: "levitating", sequence: 7 });
+  });
+});
+
+describe("secret rotation overlap (webhookEndpoints.rotateSecret)", () => {
+  const rotationHeader = v.header_during_rotation;
+
+  it("the vector's rotation header verifies with the new secret alone, the previous alone, or both", () => {
+    for (const secrets of [[v.secret], [v.secondary_secret], [v.secret, v.secondary_secret]]) {
+      expect(constructEvent(v.raw_body, rotationHeader, secrets, { now }).id).toBeDefined();
+    }
+  });
+
+  it("accepts the previous secret until its expiry and refuses it afterwards", () => {
+    const previous = { secret: v.secondary_secret, expiresAt: now + 60 };
+    // a receiver that holds only the previous secret: valid inside the window
+    expect(constructEvent(v.raw_body, rotationHeader, [previous], { now }).id).toBeDefined();
+    expect(constructEvent(v.raw_body, rotationHeader, [previous], { now: now + 60, toleranceSec: 0 }).id).toBeDefined();
+    expect(() => constructEvent(v.raw_body, rotationHeader, [previous], { now: now + 61, toleranceSec: 0 })).toThrow(
+      /expired/,
+    );
+    // after the window, a delivery signed only with the new secret verifies with [new, previous]
+    const later = now + 3600;
+    const header = generateTestHeaderString({ payload: v.raw_body, secret: v.secret, timestamp: later });
+    expect(constructEvent(v.raw_body, header, [v.secret, previous], { now: later }).id).toBeDefined();
+    // and a delivery forged with the expired previous secret is refused
+    const forged = generateTestHeaderString({ payload: v.raw_body, secret: v.secondary_secret, timestamp: later });
+    expect(() => constructEvent(v.raw_body, forged, [v.secret, previous], { now: later })).toThrow(
+      NearPaySignatureVerificationError,
+    );
+  });
+
+  it("takes entries without expiry, a single entry, and refuses empty entries", () => {
+    expect(constructEvent(v.raw_body, v.header, { secret: v.secret }, { now }).id).toBeDefined();
+    expect(constructEvent(v.raw_body, v.header, [{ secret: v.secret, expiresAt: null }], { now }).id).toBeDefined();
+    expect(() => constructEvent(v.raw_body, v.header, [{ secret: "" }], { now })).toThrow(/secret/);
+    expect(() => constructEvent(v.raw_body, v.header, [null as never], { now })).toThrow(/secret/);
+  });
+
+  it("generateTestHeaderString signs with several secrets like a rotation delivery", () => {
+    const h = generateTestHeaderString({
+      payload: v.raw_body,
+      secret: [v.secret, v.secondary_secret],
+      timestamp: v.timestamp,
+    });
+    expect(h).toBe(rotationHeader.replace(/,v1a=.*$/, ""));
+  });
+});
+
+describe("typed events and tolerant parsing of verified payloads", () => {
+  const sign = (payload: string) => generateTestHeaderString({ payload, secret: v.secret, timestamp: now });
+
+  it("returns a spec-valid refund event parsed and typed (TypedEvent)", () => {
+    const payload = JSON.stringify(event("refund.succeeded", refund({ status: "succeeded" })));
+    const evt = constructEvent(payload, sign(payload), v.secret, { now, validation: "strict" });
+    expectTypeOf(evt).toEqualTypeOf<TypedEvent>();
+    if (evt.type === "refund.succeeded") {
+      expectTypeOf(evt.data.object.amount_received).toEqualTypeOf<string | null>();
+      expect(evt.data.object.object).toBe("refund");
+    } else throw new Error("expected a refund event");
+  });
+
+  it("types review events with PublicReview", () => {
+    const payload = JSON.stringify(event("review.opened", publicReview()));
+    const evt = constructEvent(payload, sign(payload), v.secret, { now, validation: "strict" });
+    if (evt.type === "review.opened") expectTypeOf(evt.data.object.subject.type).toBeString();
+    expect(evt.type).toBe("review.opened");
+  });
+
+  it("strict validation throws on a payload that breaks the spec; tolerant reports it; off skips", () => {
+    const payload = JSON.stringify({ ...event("refund.succeeded", refund()), created: "yesterday" });
+    expect(() => constructEvent(payload, sign(payload), v.secret, { now, validation: "strict" })).toThrow(
+      NearPayResponseValidationError,
+    );
+    const seen: unknown[] = [];
+    const evt = constructEvent(payload, sign(payload), v.secret, { now, onValidationIssue: (i) => seen.push(...i) });
+    expect(evt.created as unknown).toBe("yesterday");
+    expect(seen).toHaveLength(1);
+    expect(constructEvent(payload, sign(payload), v.secret, { now, validation: "off" }).created as unknown).toBe(
+      "yesterday",
+    );
+  });
+
+  it("parseEvent checks stored events (unknown types tolerated)", () => {
+    const stored = {
+      ...event("ping", { object: "ping", webhook_endpoint: "we_01jbz9k3m4n5p6q7r8s9t0v1w2" }),
+      type: "brand.new",
+    };
+    expect(webhooks.parseEvent(stored, { validation: "strict" }).type as string).toBe("brand.new");
+    expect(parseEvent(JSON.parse(v.raw_body)).id).toBe("evt_01jbz9k3m4n5p6q7r8s9t0v1w2");
   });
 });

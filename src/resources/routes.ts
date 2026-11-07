@@ -1,36 +1,60 @@
 /**
- * The SDK's resource tree: Stage 1 public routes of `@nearpay/spec` 0.1.5 that a server holding a
- * secret or restricted key calls, plus the anonymous reads a server needs (webhook signing keys,
- * assets, x402 `supported`). Payer routes (`client_secret`) and dashboard routes (`session` only)
- * are not part of a server SDK. `test/unit/resources.test.ts` checks this tree against `PUBLIC_ROUTES`,
- * so a new key-callable route in the spec fails the build until it is bound here.
+ * The SDK's resource tree: every public route of `@nearpay/spec` 0.2.0 that a server holding a
+ * secret or restricted key can call, plus the anonymous reads a server needs (webhook signing keys,
+ * assets, x402 `supported`). Not bound:
+ * - payer routes (`client_secret`, and the anonymous payment-link `…/public` routes) — browsers and
+ *   `@nearpay/js` call those;
+ * - dashboard-only routes (`session` auth only): API keys, account, KYB, team, invitations,
+ *   settlement-destination writes, `updateRefundRecipient` (owner + step-up, INV-7).
+ * `test/unit/resources.test.ts` checks this tree against `PUBLIC_ROUTES`, so a new key-callable
+ * route in the spec fails the build until it is bound here.
  *
- * Stage 2 adds refunds (with `refunds.signers`), payment links, customers; Stage 3 billing resources.
+ * Stage 3 adds billing resources (invoices, subscriptions, products, prices).
  */
 import {
   advancePaymentAttempt,
   cancelPaymentIntent,
+  cancelRefund,
   createCheckoutSession,
+  createCustomer,
+  createPaymentIntent,
+  createPaymentLink,
+  createRefund,
   createWebhookEndpoint,
+  deleteCustomer,
   deleteWebhookEndpoint,
   expireCheckoutSession,
   getAgentPayment,
   getCheckoutSession,
+  getCustomer,
   getEvent,
   getPaymentIntent,
+  getPaymentLink,
+  getRefund,
   getSettlementDestination,
   getWebhookEndpoint,
   listAgentPayments,
   listAssets,
   listBalanceTransactions,
   listCheckoutSessions,
+  listCustomers,
   listEvents,
   listPaymentIntents,
+  listPaymentLinks,
+  listRefunds,
   listSettlementDestinations,
   listWebhookEndpointDeliveries,
   listWebhookEndpoints,
   listWebhookSigningKeys,
+  prepareRefund,
+  resendEvent,
+  reviewPaymentIntent,
+  rotateWebhookEndpointSecret,
+  simulateRefundDeposit,
+  submitRefundTx,
   testWebhookEndpoint,
+  updateCustomer,
+  updatePaymentLink,
   updateWebhookEndpoint,
   x402Requirements,
   x402Settle,
@@ -48,9 +72,32 @@ export const RESOURCES = {
     },
   },
   paymentIntents: {
+    create: createPaymentIntent,
     retrieve: getPaymentIntent,
     list: listPaymentIntents,
     cancel: cancelPaymentIntent,
+    review: reviewPaymentIntent,
+  },
+  refunds: {
+    create: createRefund,
+    retrieve: getRefund,
+    list: listRefunds,
+    prepare: prepareRefund,
+    submitTx: submitRefundTx,
+    cancel: cancelRefund,
+  },
+  paymentLinks: {
+    create: createPaymentLink,
+    retrieve: getPaymentLink,
+    list: listPaymentLinks,
+    update: updatePaymentLink,
+  },
+  customers: {
+    create: createCustomer,
+    retrieve: getCustomer,
+    list: listCustomers,
+    update: updateCustomer,
+    del: deleteCustomer,
   },
   balanceTransactions: {
     list: listBalanceTransactions,
@@ -67,10 +114,12 @@ export const RESOURCES = {
     del: deleteWebhookEndpoint,
     test: testWebhookEndpoint,
     listDeliveries: listWebhookEndpointDeliveries,
+    rotateSecret: rotateWebhookEndpointSecret,
   },
   events: {
     retrieve: getEvent,
     list: listEvents,
+    resend: resendEvent,
   },
   webhookSigningKeys: {
     list: listWebhookSigningKeys,
@@ -91,6 +140,9 @@ export const RESOURCES = {
   testHelpers: {
     paymentAttempts: {
       advance: advancePaymentAttempt,
+    },
+    refunds: {
+      simulateDeposit: simulateRefundDeposit,
     },
   },
 } as const;
