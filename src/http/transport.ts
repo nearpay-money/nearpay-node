@@ -14,6 +14,10 @@
  *     POST (the x402 facilitator calls) is not repeated after the server may have acted on it.
  *   Catalogue codes marked `retryable: false` are never retried; caller aborts are never retried.
  * - Responses are parsed tolerantly with the route's spec schema (`./parse.ts`).
+ * - Routes with a `binaryResponse` (invoice PDFs, spec 0.3.0) resolve with the raw bytes
+ *   (`Uint8Array` + `lastResponse`, `contentType`, `filename`); errors stay JSON.
+ * - Routes with an SSE `stream` are opened with `connect` (no retries here: `src/events/stream.ts`
+ *   owns reconnection and resume).
  */
 import { randomUUID } from "node:crypto";
 import { type AnyRoute, buildPath, HEADERS, type UnknownEnumValue } from "@nearpay/spec";
@@ -92,6 +96,41 @@ export interface RouteInput {
   readonly body?: unknown;
 }
 
+/** Result of a binary route (`invoices.pdf`): the bytes, with the response metadata. */
+export type BinaryResult = Uint8Array & {
+  readonly lastResponse?: ResponseMeta;
+  /** `Content-Type` as received (e.g. `application/pdf`). */
+  readonly contentType?: string;
+  /** File name from `Content-Disposition` (e.g. `INV-00042.pdf`), when the API sent one. */
+  readonly filename?: string;
+};
+
+/** Options of `Transport.connect` (SSE routes). */
+export interface ConnectOptions {
+  readonly signal?: AbortSignal | undefined;
+  readonly apiVersion?: string | undefined;
+  /** Extra request headers (e.g. `Last-Event-ID`). */
+  readonly headers?: Readonly<Record<string, string>> | undefined;
+  /** Connect timeout (until the response headers arrive); default the client's `timeoutMs`. */
+  readonly timeoutMs?: number | undefined;
+}
+
+/** File name of a `Content-Disposition: attachment; filename="…"` header. */
+export function filenameOf(disposition: string | undefined): string | undefined {
+  if (!disposition) return undefined;
+  const star = /filename\*\s*=\s*(?:UTF-8'')?([^;]+)/i.exec(disposition);
+  if (star?.[1]) {
+    try {
+      return decodeURIComponent(star[1].trim().replace(/^"|"$/g, ""));
+    } catch {
+      /* fall through to the plain parameter */
+    }
+  }
+  const plain = /filename\s*=\s*("([^"]*)"|[^;]+)/i.exec(disposition);
+  const name = plain?.[2] ?? plain?.[1]?.trim();
+  return name && name.length > 0 ? name : undefined;
+}
+
 function appendQuery(sp: URLSearchParams, key: string, v: unknown): void {
   if (v === undefined || v === null) return;
   if (Array.isArray(v)) {
@@ -119,9 +158,25 @@ export function carriesIdempotencyKey(route: Pick<AnyRoute, "method" | "idempote
   return route.method === "POST" || (route.method !== "GET" && route.idempotent);
 }
 
+/**
+ * POSTs without Idempotency-Key support that are still safe to repeat (spec 0.2.1 note on the
+ * node CR "x402Verify/x402Settle idempotent"): `x402Verify` only checks a payload (no state change;
+ * results are cached 60 s). `x402Settle` is idempotent on the payload hash, but a repeat after an
+ * unknown outcome answers `replayed: true`, which a paywall must treat as "already delivered" — the
+ * SDK cannot tell its own earlier attempt from another request's, so settle is not retried after a
+ * 5xx/timeout (the caller decides, with `lastResponse.attempts`). The near-intents verify issues a
+ * quote and is not repeated either.
+ */
+export const REPLAY_SAFE_POSTS: ReadonlySet<string> = new Set(["x402Verify"]);
+
 /** Whether repeating the request cannot apply it twice: GET, DELETE, or a route honouring Idempotency-Key. */
-export function isReplaySafe(route: Pick<AnyRoute, "method" | "idempotent">): boolean {
-  return route.method === "GET" || route.method === "DELETE" || route.idempotent;
+export function isReplaySafe(route: Pick<AnyRoute, "method" | "idempotent"> & { readonly id?: string }): boolean {
+  return (
+    route.method === "GET" ||
+    route.method === "DELETE" ||
+    route.idempotent ||
+    (route.id !== undefined && REPLAY_SAFE_POSTS.has(route.id))
+  );
 }
 
 /** Whether a failed response's status/code is one a retry can fix (catalogue `retryable`, else 429/5xx). */
@@ -134,7 +189,7 @@ export function isRetryableStatus(status: number, code: string | undefined): boo
 
 /** Whether the SDK retries this failed response for this route (see the module comment). */
 export function shouldRetryResponse(
-  route: Pick<AnyRoute, "method" | "idempotent">,
+  route: Pick<AnyRoute, "method" | "idempotent"> & { readonly id?: string },
   status: number,
   code: string | undefined,
 ): boolean {
@@ -227,23 +282,70 @@ export class Transport {
     );
   }
 
+  /** Headers every call carries: Accept, pinned version, User-Agent and (except anonymous routes) the key. */
+  #baseHeaders(route: AnyRoute, accept: string, apiVersion: string | undefined): Record<string, string> {
+    const o = this.#o;
+    const headers: Record<string, string> = {
+      Accept: accept,
+      [HEADERS.apiVersion]: apiVersion ?? o.apiVersion,
+      "User-Agent": `nearpay-node/${SDK_VERSION} node/${process.versions.node}${o.appInfo ? ` ${o.appInfo}` : ""}`,
+    };
+    if (!route.auth.every((a) => a === "anonymous")) headers[HEADERS.authorization] = `Bearer ${o.apiKey}`;
+    return headers;
+  }
+
+  /**
+   * Opens a streaming (SSE) route: resolves with the open response once its headers arrived, or
+   * throws the API's error (`NearPayError`, `retryable` set) / a `NearPayConnectionError`. No retries.
+   */
+  async connect(route: AnyRoute, input: RouteInput = {}, opts: ConnectOptions = {}): Promise<Response> {
+    const o = this.#o;
+    const url = `${o.baseUrl}${buildPath(route, input.params ?? {})}${encodeQuery(input.query)}`;
+    const headers = { ...this.#baseHeaders(route, "text/event-stream", opts.apiVersion), ...opts.headers };
+    const timeoutMs = opts.timeoutMs ?? o.timeoutMs;
+    const connectTimeout = new AbortController();
+    const timer = setTimeout(() => connectTimeout.abort(), timeoutMs);
+    const signal = opts.signal ? AbortSignal.any([opts.signal, connectTimeout.signal]) : connectTimeout.signal;
+    let res: Response;
+    try {
+      res = await o.fetch(url, { method: route.method, headers, signal, redirect: "error" });
+    } catch (e) {
+      const timedOut = connectTimeout.signal.aborted && !opts.signal?.aborted;
+      throw new NearPayConnectionError({
+        message: opts.signal?.aborted
+          ? `stream ${route.id} was aborted`
+          : timedOut
+            ? `stream ${route.id}: no response within ${timeoutMs} ms`
+            : `could not reach NearPay for ${route.id}: ${(e as Error).message}`,
+        timedOut,
+        cause: e,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (res.ok) return res;
+    const resHeaders = headersOf(res);
+    const parsed = await readBody(res).catch(() => undefined);
+    const scope = res.status === 403 && o.apiKey.startsWith("rk_") ? restrictedScopeOf(route) : undefined;
+    throw errorFromResponse(res.status, resHeaders, parsed, scope);
+  }
+
   /** Calls a spec route; resolves with the parsed body (`undefined` for 204) or throws a `NearPayError`. */
   async request<T>(route: AnyRoute, input: RouteInput = {}, opts: RequestOptions = {}): Promise<T> {
     const o = this.#o;
     const url = `${o.baseUrl}${buildPath(route, input.params ?? {})}${encodeQuery(input.query)}`;
-    const anonymous = route.auth.every((a) => a === "anonymous");
     const idempotencyKey = carriesIdempotencyKey(route) ? (opts.idempotencyKey ?? randomUUID()) : undefined;
     const maxRetries = Math.max(0, opts.maxRetries ?? o.maxRetries);
     const timeoutMs = opts.timeoutMs ?? o.timeoutMs;
     const sleep = o.sleep ?? defaultSleep;
     const replaySafe = isReplaySafe(route);
+    const binary = route.binaryResponse;
 
-    const headers: Record<string, string> = {
-      Accept: "application/json",
-      [HEADERS.apiVersion]: opts.apiVersion ?? o.apiVersion,
-      "User-Agent": `nearpay-node/${SDK_VERSION} node/${process.versions.node}${o.appInfo ? ` ${o.appInfo}` : ""}`,
-    };
-    if (!anonymous) headers[HEADERS.authorization] = `Bearer ${o.apiKey}`;
+    const headers = this.#baseHeaders(
+      route,
+      binary ? `${binary.contentType}, application/json` : "application/json",
+      opts.apiVersion,
+    );
     if (idempotencyKey) headers[HEADERS.idempotencyKey] = idempotencyKey;
     let body: string | undefined;
     if (route.method !== "GET" && route.method !== "DELETE") {
@@ -277,8 +379,10 @@ export class Transport {
 
       const resHeaders = headersOf(res);
       let parsed: unknown;
+      let bytes: Uint8Array | undefined;
       try {
-        parsed = await readBody(res);
+        if (res.ok && binary) bytes = new Uint8Array(await res.arrayBuffer());
+        else parsed = await readBody(res);
       } catch (e) {
         // the connection dropped mid-body: the server answered, so only replay-safe routes retry
         if (attempt < maxRetries && replaySafe && !opts.signal?.aborted) {
@@ -289,6 +393,49 @@ export class Transport {
       }
 
       const requestId = resHeaders[HEADERS.requestId.toLowerCase()];
+      if (res.ok && binary && bytes) {
+        const contentType = resHeaders["content-type"];
+        let validationIssues: readonly ValidationIssue[] = [];
+        const mode = o.responseValidation ?? "tolerant";
+        const expected = binary.contentType.toLowerCase();
+        if (mode !== "off" && !(contentType ?? "").toLowerCase().startsWith(expected)) {
+          const issues = [
+            {
+              path: [],
+              message: `expected Content-Type ${expected}, got ${contentType ?? "none"}`,
+              code: "content_type",
+            },
+          ];
+          if (mode === "strict") {
+            throw new NearPayResponseValidationError({
+              message: `response of ${route.id} does not match @nearpay/spec: ${describeIssues(issues)}`,
+              statusCode: res.status,
+              requestId,
+              headers: resHeaders,
+              raw: bytes,
+              issues,
+              idempotencyKey,
+            });
+          }
+          validationIssues = issues;
+          this.#report({ routeId: route.id, statusCode: res.status, requestId, issues });
+        }
+        const meta: ResponseMeta = {
+          statusCode: res.status,
+          requestId,
+          idempotencyKey,
+          idempotentReplayed: resHeaders[HEADERS.idempotentReplayed.toLowerCase()] === "true",
+          headers: resHeaders,
+          attempts: attempt + 1,
+          unknownEnumValues: [],
+          validationIssues,
+        };
+        const out = withMeta(bytes, meta);
+        Object.defineProperty(out, "contentType", { value: contentType, enumerable: false, configurable: true });
+        const filename = filenameOf(resHeaders["content-disposition"]);
+        Object.defineProperty(out, "filename", { value: filename, enumerable: false, configurable: true });
+        return out as T;
+      }
       if (res.ok) {
         const value = res.status === 204 ? undefined : parsed;
         let data = value;

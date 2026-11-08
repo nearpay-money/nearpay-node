@@ -7,6 +7,8 @@
  * const session = await nearpay.checkout.sessions.create({ amount: 200, currency: "usd", success_url: "https://shop.example/ok" });
  * for await (const pi of nearpay.paymentIntents.list({ status: "succeeded", metadata: { order_id: "42" } })) { … }
  * const event = nearpay.webhooks.constructEvent(rawBody, req.headers["nearpay-signature"], process.env.NEARPAY_WEBHOOK_SECRET!);
+ * const invoice = await nearpay.invoices.finalize((await nearpay.invoices.create({ customer: "cus_…", lines: [{ price: "price_…" }] })).id);
+ * for await (const e of nearpay.events.stream({ types: ["invoice.paid"] })) { … } // test mode keys
  * ```
  */
 export type {
@@ -18,28 +20,54 @@ export type {
   ErrorCode,
   Event,
   EventDataObject,
+  Invoice,
   MultiPayload,
   PaymentIntent,
   PaymentLink,
+  Price,
+  Product,
   PublicReview,
   Refund,
   RefundNextAction,
   SettlementDestination,
+  Subscription,
+  TaxRate,
   TypedEvent,
   UnknownEnumValue,
   WebhookObjectOf,
   WebhookType,
 } from "@nearpay/spec";
-export { API_VERSION, HEADERS, SPEC_VERSION } from "@nearpay/spec";
+export {
+  API_VERSION,
+  computeInvoiceTotals,
+  computeLineTax,
+  EVENT_STREAM_MAX_SECONDS,
+  HEADERS,
+  SPEC_VERSION,
+  taxPercentageToPpm,
+} from "@nearpay/spec";
 export {
   DEFAULT_BASE_URL,
   DEFAULT_MAX_RETRIES,
   DEFAULT_TIMEOUT_MS,
+  type EventsResource,
+  type InvoicesResource,
   NearPay,
   NearPay as default,
   type NearPayOptions,
   type RefundsResource,
 } from "./client.js";
+export {
+  type EventStream,
+  type EventStreamOptions,
+  type EventStreamParams,
+  type EventStreamReadyFrame,
+  type EventStreamReconnect,
+  type EventStreamResetFrame,
+  isRetryableStreamError,
+  type SseFrame,
+  SseParser,
+} from "./events/stream.js";
 export {
   type ErrorFields,
   NearPayApiError,
@@ -58,7 +86,13 @@ export {
   NearPayStateConflictError,
 } from "./http/errors.js";
 export type { ResponseValidation, ValidationIssue } from "./http/parse.js";
-export type { RequestOptions, ResponseMeta, ValidationIssueReport } from "./http/transport.js";
+export {
+  type BinaryResult,
+  REPLAY_SAFE_POSTS,
+  type RequestOptions,
+  type ResponseMeta,
+  type ValidationIssueReport,
+} from "./http/transport.js";
 export type {
   BoundResources,
   RouteBodyInput,
@@ -96,7 +130,11 @@ export type { RefundSigners, SignAndSubmitOptions } from "./signing/signers.js";
 export type {
   CreatedPaymentIntent,
   DeletedCustomer,
+  DeletedInvoice,
   EventResend,
+  InvoiceLineItem,
+  SubscriptionItem,
+  TestHelperPayment,
   WebhookDelivery,
   WebhookEndpoint,
 } from "./types.js";

@@ -4,6 +4,7 @@
  */
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { WEBHOOK_TYPES } from "@nearpay/spec";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   computeV1Signature,
@@ -17,7 +18,7 @@ import {
   verifyEd25519,
   webhooks,
 } from "../../src/index.js";
-import { event, publicReview, refund } from "../support/fixtures.js";
+import { event, invoice, publicReview, refund, subscription } from "../support/fixtures.js";
 
 interface Vector {
   secret: string;
@@ -296,6 +297,51 @@ describe("typed events and tolerant parsing of verified payloads", () => {
     expect(constructEvent(payload, sign(payload), v.secret, { now, validation: "off" }).created as unknown).toBe(
       "yesterday",
     );
+  });
+
+  it("verifies and types the 12 billing event types of spec 0.3.0 (invoice.*, customer.subscription.*)", () => {
+    const billing = Object.keys(WEBHOOK_TYPES).filter(
+      (t) => t.startsWith("invoice.") || t.startsWith("customer.subscription."),
+    );
+    expect(billing.sort()).toEqual(
+      [
+        "invoice.created",
+        "invoice.finalized",
+        "invoice.sent",
+        "invoice.paid",
+        "invoice.payment_failed",
+        "invoice.overdue",
+        "invoice.voided",
+        "invoice.marked_uncollectible",
+        "customer.subscription.created",
+        "customer.subscription.updated",
+        "customer.subscription.deleted",
+        "customer.subscription.renewal_upcoming",
+      ].sort(),
+    );
+    for (const type of billing) {
+      // events carry hosted_invoice_url: null (secrets never travel on the bus)
+      const object = type.startsWith("invoice.")
+        ? invoice({ status: "open", hosted_invoice_url: null })
+        : subscription();
+      const payload = JSON.stringify(event(type, object));
+      const evt = constructEvent(payload, sign(payload), v.secret, { now, validation: "strict" });
+      expect(evt.type, type).toBe(type);
+      expect((evt.data.object as { object: string }).object).toBe(
+        type.startsWith("invoice.") ? "invoice" : "subscription",
+      );
+    }
+    const payload = JSON.stringify(event("invoice.paid", invoice({ status: "paid", hosted_invoice_url: null })));
+    const evt = constructEvent(payload, sign(payload), v.secret, { now });
+    if (evt.type === "invoice.paid") {
+      expectTypeOf(evt.data.object.amount_paid).toEqualTypeOf<string | number>();
+      expectTypeOf(evt.data.object.sequence).toBeNumber();
+    }
+    const sub = JSON.stringify(event("customer.subscription.renewal_upcoming", subscription()));
+    const e2 = constructEvent(sub, sign(sub), v.secret, { now });
+    if (e2.type === "customer.subscription.renewal_upcoming")
+      expectTypeOf(e2.data.object.current_period_end).toBeNumber();
+    expect(e2.type).toBe("customer.subscription.renewal_upcoming");
   });
 
   it("parseEvent checks stored events (unknown types tolerated)", () => {

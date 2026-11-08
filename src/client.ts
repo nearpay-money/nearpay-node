@@ -2,8 +2,9 @@
  * `new NearPay(apiKey, options)` — the server SDK client (lld/sdks-and-tools.md §1).
  */
 import { API_VERSION } from "@nearpay/spec";
+import type { EventStream, EventStreamOptions, EventStreamParams } from "./events/stream.js";
 import type { ResponseValidation } from "./http/parse.js";
-import { Transport, type ValidationIssueReport } from "./http/transport.js";
+import { type BinaryResult, type RequestOptions, Transport, type ValidationIssueReport } from "./http/transport.js";
 import { type BoundResources, bindResources } from "./resources/bind.js";
 import { RESOURCES, type Resources } from "./resources/routes.js";
 import { type RefundCalls, type RefundSigners, refundSigners } from "./signing/signers.js";
@@ -52,6 +53,25 @@ export type RefundsResource = Bound["refunds"] & {
   readonly signers: RefundSigners;
 };
 
+/** `nearpay.invoices`: the invoice routes; `pdf` resolves with the document's bytes. */
+export type InvoicesResource = Omit<Bound["invoices"], "pdf"> & {
+  /**
+   * Downloads the PDF of a finalized invoice (`GET /v1/invoices/{id}/pdf`): the bytes as a
+   * `Uint8Array` (write it with `fs.writeFile`), `filename` from `Content-Disposition`. Drafts have
+   * no PDF (`409 state_conflict`).
+   */
+  pdf(id: string, options?: RequestOptions): Promise<BinaryResult>;
+};
+
+/** `nearpay.events`: the event routes; `stream` opens the live event stream (test mode keys only). */
+export type EventsResource = Omit<Bound["events"], "stream"> & {
+  /**
+   * Live events as an async iterator over `GET /v1/events/stream`, resuming with `Last-Event-ID`
+   * across reconnects (`src/events/stream.ts`). API keys stream test mode only.
+   */
+  stream(params?: EventStreamParams, options?: EventStreamOptions): EventStream;
+};
+
 const KEY_RE = /^(sk|rk)_(live|test)_[0-9A-Za-z]+$/;
 
 export class NearPay {
@@ -61,9 +81,14 @@ export class NearPay {
   readonly paymentLinks: Bound["paymentLinks"];
   readonly customers: Bound["customers"];
   readonly balanceTransactions: Bound["balanceTransactions"];
+  readonly products: Bound["products"];
+  readonly prices: Bound["prices"];
+  readonly taxRates: Bound["taxRates"];
+  readonly invoices: InvoicesResource;
+  readonly subscriptions: Bound["subscriptions"];
   readonly settlementDestinations: Bound["settlementDestinations"];
   readonly webhookEndpoints: Bound["webhookEndpoints"];
-  readonly events: Bound["events"];
+  readonly events: EventsResource;
   readonly webhookSigningKeys: Bound["webhookSigningKeys"];
   readonly agentPayments: Bound["agentPayments"];
   readonly x402: Bound["x402"];
@@ -109,9 +134,14 @@ export class NearPay {
     this.paymentLinks = r.paymentLinks;
     this.customers = r.customers;
     this.balanceTransactions = r.balanceTransactions;
+    this.products = r.products;
+    this.prices = r.prices;
+    this.taxRates = r.taxRates;
+    this.invoices = r.invoices as unknown as InvoicesResource;
+    this.subscriptions = r.subscriptions;
     this.settlementDestinations = r.settlementDestinations;
     this.webhookEndpoints = r.webhookEndpoints;
-    this.events = r.events;
+    this.events = r.events as unknown as EventsResource;
     this.webhookSigningKeys = r.webhookSigningKeys;
     this.agentPayments = r.agentPayments;
     this.x402 = r.x402;

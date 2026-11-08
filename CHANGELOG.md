@@ -2,6 +2,54 @@
 
 `@nearpay/node` follows semver. Breaking changes bump the major version and carry a migration note here.
 
+## 0.3.0 — Stage 3, step 3.3 (`@nearpay/spec` 0.3.0)
+
+Minor release: Stage 3 resources and helpers. **No breaking API change** — every 0.2 method, option,
+type and export keeps its name and shape.
+
+Added:
+
+- Billing: `products`, `prices`, `taxRates` (`create`, `retrieve`, `list`, `update`); `invoices`
+  (`create`, `retrieve`, `list`, `update`, `del`, `finalize`, `send`, `void`, `markUncollectible`,
+  `pdf`); `subscriptions` (`create`, `retrieve`, `list`, `update`, `cancel`). Types `Invoice`,
+  `InvoiceLineItem`, `DeletedInvoice`, `Product`, `Price`, `TaxRate`, `Subscription`,
+  `SubscriptionItem`; the spec's normative tax arithmetic is re-exported (`computeLineTax`,
+  `computeInvoiceTotals`, `taxPercentageToPpm`) for previews that match NearPay's rounding.
+- `invoices.pdf(id)` resolves with the PDF **bytes** (`BinaryResult`: a `Uint8Array` with `filename` from
+  `Content-Disposition`, `contentType` and `lastResponse`). The transport now handles spec routes with a
+  `binaryResponse` (`Accept: application/pdf, application/json`; errors stay JSON; a 200 with another
+  content type is a contract violation reported per `responseValidation`).
+- `events.stream(params?, options?)` — `GET /v1/events/stream` as an async iterator (`EventStream`):
+  typed `TypedEvent`s, `onReady` / `onReset` / `onReconnect`, `lastEventId`, `close()`, `signal`.
+  Reconnects after the server's 1 h close, dropped or silent connections (`idleTimeoutMs`, default 45 s),
+  429 and 5xx (backoff 1 s → 30 s with jitter, `Retry-After` honoured; the server's `retry:` after a
+  clean close) and resumes with `Last-Event-ID`; drops duplicate ids; forgets a cursor the server
+  `reset`; ends by throwing on 400/401/403 (`livemode_forbidden`: API keys stream test mode only).
+  Frames are parsed tolerantly like responses (`validation`, `onValidationIssue`). `SseParser` exported.
+- Webhooks: `constructEvent` / `parseEvent` verify and type the 12 billing event types (`invoice.*`,
+  `customer.subscription.*`) — they come from the spec's `WEBHOOK_TYPES`, no SDK change needed beyond the
+  spec bump; tests cover every type.
+- Cross-chain x402: `x402.nearIntents.{requirements, verify, settle}` (not idempotent: never repeated
+  after a 5xx/timeout).
+- Test helper: `testHelpers.checkoutSessions.pay(id, {outcome?, origin_asset_id?, amount_in?})` (behind
+  `nearpay trigger`).
+- Restricted keys: every key-callable route of spec 0.3.0 has a restricted-key scope, including the
+  sandbox helpers (`checkout_sessions.write`, `refunds.write`); `scopesFor` covers the new methods.
+
+Changed (safer, no API change):
+
+- **`x402.verify` is retried** after a 5xx, timeout or dropped connection like a GET (it changes no state;
+  node CR "x402Verify/x402Settle idempotent", answered in the spec 0.2.1 notes). `x402.settle` stays
+  un-retried: a repeat after an unknown outcome answers `replayed: true`, which a paywall must treat as
+  "already delivered", and the SDK cannot tell its own earlier attempt from another request's.
+
+Known issue (spec CR filed for 0.3.1): the spec's `TypedEvent` is built with `Omit` over the loose
+`Event` schema, so the envelope fields (`id`, `created`, `livemode`, …) are typed `unknown`; `type` and
+`data.object` narrow correctly. Use `stream.lastEventId` or `String(event.id)` until the spec fix.
+
+Not bound: hosted-invoice payer routes (`/v1/invoices/{id}/public/**`, invoice secret — hosted page and
+`@nearpay/mcp`), CLI login (`/v1/cli/logins*`, anonymous device flow and dashboard approval — `@nearpay/cli`).
+
 ## 0.2.0 — Stage 2, step 2.3 (`@nearpay/spec` 0.2.0)
 
 Minor release: new resources and helpers. **No breaking API change** — every 0.1 method, option, type

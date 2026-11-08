@@ -2,7 +2,9 @@
  * Contract test: every SDK method is called through a minimal gateway into the spec-driven mock of the
  * owning service (`mockPeer`). The mock validates path, query and body strictly against the route,
  * authorizes the secret-key principal from the route's `auth`, and validates every response against the
- * route's response schema; so a passing call proves the SDK's request matches `@nearpay/spec` 0.2.0.
+ * route's response schema; so a passing call proves the SDK's request matches `@nearpay/spec` 0.3.0.
+ * Stage 3 adds the billing service, the events stream (frames written through the kit's `ctx.sse()`)
+ * and the invoice PDF (the kit has no binary responses yet, so the handler writes the bytes itself).
  */
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -11,24 +13,38 @@ import {
   advancePaymentAttempt,
   cancelPaymentIntent,
   cancelRefund,
+  cancelSubscription,
   createCheckoutSession,
   createCustomer,
+  createInvoice,
   createPaymentIntent,
   createPaymentLink,
+  createPrice,
+  createProduct,
   createRefund,
+  createSubscription,
+  createTaxRate,
   createWebhookEndpoint,
   deleteCustomer,
+  deleteInvoice,
   deleteWebhookEndpoint,
   Event,
   expireCheckoutSession,
+  finalizeInvoice,
   getAgentPayment,
   getCheckoutSession,
   getCustomer,
   getEvent,
+  getInvoice,
+  getInvoicePdf,
   getPaymentIntent,
   getPaymentLink,
+  getPrice,
+  getProduct,
   getRefund,
   getSettlementDestination,
+  getSubscription,
+  getTaxRate,
   getWebhookEndpoint,
   listAgentPayments,
   listAssets,
@@ -36,30 +52,51 @@ import {
   listCheckoutSessions,
   listCustomers,
   listEvents,
+  listInvoices,
   listPaymentIntents,
   listPaymentLinks,
+  listPrices,
+  listProducts,
   listRefunds,
   listSettlementDestinations,
+  listSubscriptions,
+  listTaxRates,
   listWebhookEndpointDeliveries,
   listWebhookEndpoints,
   listWebhookSigningKeys,
   MultiPayload,
+  markInvoiceUncollectible,
+  NearIntentsSettleResponse,
+  NearIntentsVerifyResponse,
   PaymentRequired,
+  payCheckoutSessionTestHelper,
   prepareRefund,
   resendEvent,
   reviewPaymentIntent,
   rotateWebhookEndpointSecret,
   SettleResponse,
   SupportedResponse,
+  sendInvoice,
   simulateRefundDeposit,
+  streamEvents,
   submitRefundTx,
   testWebhookEndpoint,
   updateCustomer,
+  updateInvoice,
   updatePaymentLink,
+  updatePrice,
+  updateProduct,
+  updateSubscription,
+  updateTaxRate,
   updateWebhookEndpoint,
   VerifyResponse,
+  voidInvoice,
   WebhookDelivery,
   WebhookEndpoint,
+  X402PaymentRequiredAny,
+  x402NearIntentsRequirements,
+  x402NearIntentsSettle,
+  x402NearIntentsVerify,
   x402Requirements,
   x402Settle,
   x402Supported,
@@ -82,11 +119,20 @@ import {
   createdPaymentIntent,
   customer,
   deletedCustomer,
+  deletedInvoice,
+  event,
   eventResend,
   ids,
+  invoice,
   paymentLink,
+  price,
+  product,
   refund,
   signIntentAction,
+  streamReady,
+  subscription,
+  taxRate,
+  testHelperPayment,
   webhookEndpoint,
 } from "../support/fixtures.js";
 import { ACCOUNT, type Gateway, startGateway } from "../support/gateway.js";
@@ -95,6 +141,9 @@ const require = createRequire(import.meta.url);
 const vectors = JSON.parse(
   readFileSync(require.resolve("@nearpay/spec/test-vectors/intents-payloads.json"), "utf8"),
 ) as { binding: string; nep413: { multipayload: unknown } };
+const niVectors = JSON.parse(
+  readFileSync(require.resolve("@nearpay/spec/test-vectors/x402-near-intents.json"), "utf8"),
+) as { headers: Record<string, { accepts?: unknown[] } & Record<string, unknown>> };
 
 const KEY = "sk_test_0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL";
 const now = () => Math.floor(Date.now() / 1000);
@@ -171,7 +220,7 @@ let gw: Gateway;
 let np: NearPay;
 
 beforeAll(async () => {
-  gw = await startGateway(["payments", "webhooks", "agentpay", "identity", "rails"]);
+  gw = await startGateway(["payments", "webhooks", "agentpay", "identity", "rails", "billing"]);
   np = new NearPay(KEY, { baseUrl: gw.url, maxRetries: 0 });
 });
 afterAll(() => gw?.stop());
@@ -485,6 +534,151 @@ describe("stage 2 (spec 0.2.0)", () => {
   });
 });
 
+describe("stage 3 (spec 0.3.0)", () => {
+  it("billing catalogue: products, prices, tax rates", async () => {
+    const b = gw.peer("billing");
+    b.on(createProduct, async () => product());
+    b.on(getProduct, async () => product());
+    b.on(listProducts, async () => list("/v1/products", [product()]));
+    b.on(updateProduct, async () => product({ active: false }));
+    b.on(createPrice, async () => price());
+    b.on(getPrice, async () => price());
+    b.on(listPrices, async () => list("/v1/prices", [price()]));
+    b.on(updatePrice, async () => price());
+    b.on(createTaxRate, async () => taxRate());
+    b.on(getTaxRate, async () => taxRate());
+    b.on(listTaxRates, async () => list("/v1/tax_rates", [taxRate()]));
+    b.on(updateTaxRate, async () => taxRate());
+    await np.products.create({ name: "Pro plan", metadata: { sku: "pro" } });
+    await np.products.retrieve(ids.prod);
+    await np.products.list({ active: false, limit: 5 });
+    await np.products.update(ids.prod, { active: false });
+    await np.prices.create({ product: ids.prod, unit_amount: "5000000", currency: "asset", asset_id: USDC_NEAR });
+    await np.prices.retrieve(ids.price);
+    await np.prices.list({ active: true });
+    await np.prices.update(ids.price, { active: false });
+    await np.taxRates.create({
+      display_name: "Sales tax",
+      percentage: "8.875",
+      inclusive: false,
+      jurisdiction: "US-NY",
+    });
+    await np.taxRates.retrieve(ids.txr);
+    await np.taxRates.list({ inclusive: false });
+    await np.taxRates.update(ids.txr, { active: false });
+    expect(b.callsTo(createPrice)[0]?.principal).toMatchObject({ ptype: "secret_key", acct: ACCOUNT });
+    expect(b.callsTo(listProducts)[0]?.query).toMatchObject({ active: false, limit: 5 });
+  });
+
+  it("invoices incl. lifecycle and the PDF bytes", async () => {
+    const b = gw.peer("billing");
+    const open = invoice({ status: "open" });
+    b.on(createInvoice, async () => invoice());
+    b.on(getInvoice, async () => open);
+    b.on(listInvoices, async () => list("/v1/invoices", [open]));
+    b.on(updateInvoice, async () => invoice());
+    b.on(deleteInvoice, async () => deletedInvoice());
+    b.on(finalizeInvoice, async () => open);
+    b.on(sendInvoice, async () => open);
+    b.on(voidInvoice, async () => invoice({ status: "void" }));
+    b.on(markInvoiceUncollectible, async () => invoice({ status: "uncollectible", uncollectible_reason: "merchant" }));
+    const pdf = Buffer.from("%PDF-1.7\n%%EOF\n");
+    b.on(getInvoicePdf, async (ctx) => {
+      ctx.reply.hijack();
+      ctx.reply.raw.writeHead(200, {
+        "content-type": "application/pdf",
+        "content-disposition": 'attachment; filename="INV-00042.pdf"',
+        "cache-control": "private, no-store",
+      });
+      ctx.reply.raw.end(pdf);
+    });
+    const draft = await np.invoices.create({
+      customer: ids.cus,
+      lines: [{ price: ids.price }],
+      due_date: now() + 86_400,
+      reminder_days: [0, 7],
+    });
+    await np.invoices.update(draft.id, { lines: [{ unit_amount: 1000, description: "Consulting", quantity: 3 }] });
+    await np.invoices.finalize(draft.id);
+    await np.invoices.send(draft.id);
+    await np.invoices.retrieve(draft.id);
+    await np.invoices.list({ status: "open", "due_date[gte]": now() });
+    await np.invoices.void(draft.id);
+    await np.invoices.markUncollectible(draft.id);
+    await np.invoices.del(draft.id);
+    const bytes = await np.invoices.pdf(draft.id);
+    expect(Buffer.from(bytes).equals(pdf)).toBe(true);
+    expect(bytes.filename).toBe("INV-00042.pdf");
+    expect(b.callsTo(finalizeInvoice)[0]?.idempotencyKey).toBeDefined();
+    expect(b.callsTo(getInvoicePdf)[0]?.params).toEqual({ id: draft.id });
+  });
+
+  it("subscriptions", async () => {
+    const b = gw.peer("billing");
+    b.on(createSubscription, async () => subscription());
+    b.on(getSubscription, async () => subscription());
+    b.on(listSubscriptions, async () => list("/v1/subscriptions", [subscription()]));
+    b.on(updateSubscription, async () => subscription());
+    b.on(cancelSubscription, async () => subscription({ status: "canceled", cancellation_reason: "requested" }));
+    await np.subscriptions.create({ customer: ids.cus, items: [{ price: ids.price }], days_until_due: 7 });
+    await np.subscriptions.retrieve(ids.sub);
+    await np.subscriptions.list({ status: "past_due" });
+    await np.subscriptions.update(ids.sub, { items: [{ price: ids.price, quantity: 3 }] });
+    expect((await np.subscriptions.cancel(ids.sub)).status).toBe("canceled");
+    expect(b.callsTo(cancelSubscription)[0]?.body).toEqual({});
+  });
+
+  it("events stream through the kit's SSE writer, resuming with Last-Event-ID", async () => {
+    const w = gw.peer("webhooks");
+    const e1 = event("invoice.finalized", invoice({ status: "open", hosted_invoice_url: null }), {
+      id: "evt_01jbz9k3m4n5p6q7r8s9t0v1w5",
+    });
+    w.on(streamEvents, async (ctx) => {
+      const s = ctx.sse();
+      s.send("ready", streamReady({ resumed_after: ctx.headers["last-event-id"] ?? null }));
+      s.send("event", e1, e1.id);
+      s.close();
+    });
+    const stream = np.events.stream({ types: ["invoice.finalized"], starting_after: ids.evt }, { reconnect: false });
+    const got: string[] = [];
+    for await (const e of stream) got.push(String(e.id)); // TypedEvent envelope keys are `unknown` until spec CR (see CHANGELOG)
+    expect(got).toEqual([e1.id]);
+    expect(stream.ready?.resumed_after).toBe(ids.evt);
+    const call = w.callsTo(streamEvents)[0];
+    expect(call?.query).toMatchObject({ types: "invoice.finalized" });
+    expect(call?.headers["last-event-id"]).toBe(ids.evt);
+  });
+
+  it("cross-chain x402 and the checkout test helper", async () => {
+    const a = gw.peer("agentpay");
+    const h = niVectors.headers;
+    const unquoted = (h.payment_required_unquoted?.accepts ?? [])[0];
+    a.on(x402NearIntentsRequirements, async () => X402PaymentRequiredAny.parse(h.payment_required_unquoted));
+    a.on(x402NearIntentsVerify, async () => NearIntentsVerifyResponse.parse(h.verify_response_quote));
+    a.on(x402NearIntentsSettle, async () => NearIntentsSettleResponse.parse(h.payment_response_pending));
+    await np.x402.nearIntents.requirements({
+      resource: { url: "https://merchant.example/premium" },
+      amount: "1000000",
+      origins: [{ asset_id: "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near", max_timeout_s: 1800 }],
+    });
+    const verify = {
+      x402Version: 2,
+      paymentPayload: h.payment_signature_quote,
+      paymentRequirements: unquoted,
+    } as never;
+    const settle = {
+      x402Version: 2,
+      paymentPayload: h.payment_signature_deposit,
+      paymentRequirements: unquoted,
+    } as never;
+    expect((await np.x402.nearIntents.verify(verify)).isValid).toBe(true);
+    expect((await np.x402.nearIntents.settle(settle)).errorReason).toBe("settlement_pending");
+    const p = gw.peer("payments");
+    p.on(payCheckoutSessionTestHelper, async () => testHelperPayment());
+    expect((await np.testHelpers.checkoutSessions.pay(ids.cs, { outcome: "succeeded" })).outcome).toBe("succeeded");
+  });
+});
+
 it("covers every bound route in the cases above", () => {
   const ids = routesOf(RESOURCES).map((b) => b.route.id);
   const covered = [
@@ -536,6 +730,38 @@ it("covers every bound route in the cases above", () => {
     deleteCustomer,
     rotateWebhookEndpointSecret,
     resendEvent,
+    createProduct,
+    getProduct,
+    listProducts,
+    updateProduct,
+    createPrice,
+    getPrice,
+    listPrices,
+    updatePrice,
+    createTaxRate,
+    getTaxRate,
+    listTaxRates,
+    updateTaxRate,
+    createInvoice,
+    getInvoice,
+    listInvoices,
+    updateInvoice,
+    deleteInvoice,
+    finalizeInvoice,
+    sendInvoice,
+    voidInvoice,
+    markInvoiceUncollectible,
+    getInvoicePdf,
+    createSubscription,
+    getSubscription,
+    listSubscriptions,
+    updateSubscription,
+    cancelSubscription,
+    streamEvents,
+    x402NearIntentsRequirements,
+    x402NearIntentsVerify,
+    x402NearIntentsSettle,
+    payCheckoutSessionTestHelper,
   ].map((r) => r.id);
   expect(new Set(ids)).toEqual(new Set(covered));
 });

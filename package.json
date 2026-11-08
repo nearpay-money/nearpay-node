@@ -1,7 +1,7 @@
 {
   "name": "@nearpay/node",
-  "version": "0.2.0",
-  "description": "NearPay server SDK for Node.js and TypeScript: typed resources from @nearpay/spec, auto-pagination, automatic idempotency keys and safe retries, tolerant response parsing, webhook signature verification, refund signing helpers.",
+  "version": "0.3.0",
+  "description": "NearPay server SDK for Node.js and TypeScript: typed resources from @nearpay/spec (payments, refunds, billing), live event stream, auto-pagination, automatic idempotency keys and safe retries, tolerant response parsing, webhook signature verification, refund signing helpers.",
   "license": "Apache-2.0",
   "type": "module",
   "sideEffects": false,
@@ -43,14 +43,14 @@
     "release:local": "node scripts/release-local.mjs"
   },
   "dependencies": {
-    "@nearpay/spec": "0.2.0"
+    "@nearpay/spec": "0.3.0"
   },
   "peerDependencies": {
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.5",
-    "@nearpay-internal/testing": "0.2.0",
+    "@nearpay-internal/testing": "0.3.0",
     "@noble/curves": "2.4.0",
     "@noble/hashes": "2.4.0",
     "@types/node": "22.20.5",

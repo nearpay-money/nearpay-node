@@ -10,6 +10,10 @@
  * response schema (a mock cannot drift from the spec); routes with `idempotent: true` replay stored
  * responses for a repeated key (`Idempotent-Replayed: true`) and answer `409 idempotency_key_reused`
  * for a reused key with another body, as api-conventions §4 specifies.
+ *
+ * Stage 3 (spec 0.3.0): route `headers` (e.g. `Last-Event-ID`) are validated; binary routes answer
+ * `{$binary}` (bytes with the route's content type) and SSE routes `{$stream}` (the handler writes
+ * frames to the response) — each only on routes that declare it, with the matching `Accept`.
  */
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -27,6 +31,7 @@ import {
   type RouteQuery,
   type RouteResponse,
 } from "@nearpay/spec";
+import { z } from "zod";
 
 export interface MockRequest<R extends AnyRoute = AnyRoute> {
   readonly route: R;
@@ -42,7 +47,25 @@ export interface MockRequest<R extends AnyRoute = AnyRoute> {
 /** Answer with a typed body (status = the route's), or a full response. */
 export type MockReply<R extends AnyRoute> =
   | RouteResponse<R>
-  | { readonly $status: number; readonly $body?: unknown; readonly $headers?: Record<string, string> };
+  | { readonly $status: number; readonly $body?: unknown; readonly $headers?: Record<string, string> }
+  | { readonly $binary: Uint8Array; readonly $contentType?: string; readonly $headers?: Record<string, string> }
+  | { readonly $stream: (res: ServerResponse, req: MockRequest<R>) => void | Promise<void> };
+
+/** Writes one SSE frame (`event:`, optional `id:`, `data:` JSON). */
+export function sseFrame(event: string, data: unknown, id?: string): string {
+  return `event: ${event}\n${id ? `id: ${id}\n` : ""}data: ${JSON.stringify(data)}\n\n`;
+}
+
+/** Opens an SSE response the way the webhooks service does (`retry:` first). */
+export function openSseResponse(res: ServerResponse, retryMs = 3000): void {
+  res.writeHead(200, {
+    "content-type": "text/event-stream",
+    "cache-control": "no-cache",
+    connection: "keep-alive",
+    "x-request-id": "req_stream0000jbz9k3m4n5p6q7r8",
+  });
+  res.write(`retry: ${retryMs}\n\n`);
+}
 
 export type MockHandler<R extends AnyRoute> = (req: MockRequest<R>) => MockReply<R> | Promise<MockReply<R>>;
 
@@ -118,7 +141,8 @@ function compile(route: AnyRoute) {
   return { route, names, re: new RegExp(`^${src}$`) };
 }
 
-const TABLE = PUBLIC_ROUTES.map(compile);
+// literal segments win over `{param}` ones (`/v1/events/stream` before `/v1/events/{id}`), like the gateway
+const TABLE = PUBLIC_ROUTES.map(compile).sort((a, b) => a.names.length - b.names.length);
 
 function queryObject(sp: URLSearchParams): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -204,6 +228,22 @@ export async function startSpecMock(): Promise<SpecMock> {
         if (needsKey && !idempotencyKey) return v("Idempotency-Key missing");
         if (!needsKey && idempotencyKey) return v("Idempotency-Key on a route that does not take one");
         if (idempotencyKey && idempotencyKey.length > 255) return v("Idempotency-Key longer than 255 chars");
+        const accept = String(req.headers.accept ?? "");
+        if (route.stream && accept !== "text/event-stream") return v("SSE routes need Accept: text/event-stream");
+        if (route.binaryResponse && !accept.includes(route.binaryResponse.contentType)) {
+          return v(`binary routes need Accept: ${route.binaryResponse.contentType}`);
+        }
+        if (!route.stream && !route.binaryResponse && accept !== "application/json")
+          return v("Accept must be application/json");
+        if (route.headers instanceof z.ZodObject) {
+          const picked = Object.fromEntries(
+            Object.keys(route.headers.shape).flatMap((k) =>
+              req.headers[k] === undefined ? [] : [[k, req.headers[k]]],
+            ),
+          );
+          const h = route.headers.safeParse(picked);
+          if (!h.success) return v(`headers: ${JSON.stringify(h.error.issues[0])}`);
+        }
 
         // params, query, body (strict, like the service bootstrap)
         const paramObj = Object.fromEntries(hit.t.names.map((n, i) => [n, decodeURIComponent(hit.m?.[i + 1] ?? "")]));
@@ -291,6 +331,35 @@ export async function startSpecMock(): Promise<SpecMock> {
         let status: number = route.status;
         let out: unknown = reply;
         let headers: Record<string, string> = {};
+        if (typeof reply === "object" && reply !== null && "$stream" in reply) {
+          if (!route.stream) return v("mock: $stream reply on a route without a stream");
+          await (reply as { $stream: (res: ServerResponse, req: MockRequest) => void | Promise<void> }).$stream(
+            res,
+            mreq,
+          );
+          return;
+        }
+        if (route.stream) {
+          violations.push({
+            route: route.id,
+            method,
+            url: req.url ?? "",
+            problem: "mock: stream route needs a $stream reply",
+          });
+          send(res, 500, envelopeFor("api_error", "mock: invalid response"));
+          return;
+        }
+        if (typeof reply === "object" && reply !== null && "$binary" in reply) {
+          const b = reply as { $binary: Uint8Array; $contentType?: string; $headers?: Record<string, string> };
+          if (!route.binaryResponse) return v("mock: $binary reply on a JSON route");
+          res.writeHead(route.status, {
+            "content-type": b.$contentType ?? route.binaryResponse.contentType,
+            "x-request-id": requestId(),
+            ...b.$headers,
+          });
+          res.end(Buffer.from(b.$binary));
+          return;
+        }
         if (typeof reply === "object" && reply !== null && "$status" in reply) {
           const r = reply as { $status: number; $body?: unknown; $headers?: Record<string, string> };
           status = r.$status;

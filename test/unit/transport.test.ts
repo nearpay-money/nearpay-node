@@ -5,6 +5,7 @@ import {
   carriesIdempotencyKey,
   encodeQuery,
   failedBeforeSending,
+  filenameOf,
   isReplaySafe,
   isRetryableStatus,
   parseRetryAfter,
@@ -339,6 +340,16 @@ describe("helpers", () => {
     expect(restrictedScopeOf({ auth: ["secret_key"] })).toBeUndefined();
   });
 
+  it("filenameOf reads Content-Disposition (plain, quoted, RFC 5987)", () => {
+    expect(filenameOf('attachment; filename="INV-00042.pdf"')).toBe("INV-00042.pdf");
+    expect(filenameOf("attachment; filename=INV-7.pdf")).toBe("INV-7.pdf");
+    expect(filenameOf("attachment; filename*=UTF-8''Rechnung%20%C3%84.pdf; filename=x.pdf")).toBe("Rechnung Ä.pdf");
+    expect(filenameOf("attachment; filename*=UTF-8''%E0%A4%A; filename=fallback.pdf")).toBe("fallback.pdf");
+    expect(filenameOf("attachment")).toBeUndefined();
+    expect(filenameOf('attachment; filename=""')).toBeUndefined();
+    expect(filenameOf(undefined)).toBeUndefined();
+  });
+
   it("parseRetryAfter", () => {
     expect(parseRetryAfter(undefined)).toBeNull();
     expect(parseRetryAfter("3")).toBe(3000);
@@ -395,6 +406,18 @@ describe("retry policy: only replay-safe requests are repeated after the server 
     srv.push(json(200, { success: true }));
     await client({ fetch: refusing }).x402.settle(settleBody);
     expect(calls).toBe(2);
+  });
+
+  it("repeats x402 verify (no state change) after a 5xx or a timeout, with the same Idempotency-Key", async () => {
+    srv.push(json(503, envelope("api_error", "api_error")), stall, json(200, { isValid: true }));
+    const r = await client({ timeoutMs: 80 }).x402.verify(settleBody);
+    expect(r.lastResponse?.attempts).toBe(3);
+    expect(srv.requests).toHaveLength(3);
+    const keys = new Set(srv.requests.map((q) => q.headers["idempotency-key"]));
+    expect(keys.size).toBe(1);
+    expect(isReplaySafe({ id: "x402Verify", method: "POST", idempotent: false })).toBe(true);
+    expect(isReplaySafe({ id: "x402Settle", method: "POST", idempotent: false })).toBe(false);
+    expect(isReplaySafe({ id: "x402NearIntentsVerify", method: "POST", idempotent: false })).toBe(false);
   });
 
   it("retries DELETE and idempotent PATCH after 5xx; never retries catalogue codes marked non-retryable", async () => {
