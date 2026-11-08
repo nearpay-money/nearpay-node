@@ -10,11 +10,20 @@ import {
   CreatedPaymentIntent,
   Customer,
   DeletedCustomer,
+  DeletedInvoice,
   Event,
   EventResend,
+  EventStreamReady,
+  EventStreamReset,
+  Invoice,
   PaymentLink,
+  Price,
+  Product,
   PublicReview,
   Refund,
+  Subscription,
+  TaxRate,
+  TestHelperPayment,
   WebhookDelivery,
   WebhookEndpoint,
 } from "@nearpay/spec";
@@ -62,6 +71,15 @@ export const ids = {
   evt: "evt_01jbz9k3m4n5p6q7r8s9t0v1w2",
   whd: "whd_01jbz9k3m4n5p6q7r8s9t0v1w2",
   sd: "sd_01jbz9k3m4n5p6q7r8s9t0v1w2",
+  // stage 3 — billing
+  prod: "prod_01jbz9k3m4n5p6q7r8s9t0v1w2",
+  price: "price_01jbz9k3m4n5p6q7r8s9t0v1w2",
+  txr: "txr_01jbz9k3m4n5p6q7r8s9t0v1w2",
+  in: "in_01jbz9k3m4n5p6q7r8s9t0v1w2",
+  il: "il_01jbz9k3m4n5p6q7r8s9t0v1w2",
+  sub: "sub_01jbz9k3m4n5p6q7r8s9t0v1w2",
+  si: "si_01jbz9k3m4n5p6q7r8s9t0v1w2",
+  acct: "acct_01jbz9k3m4n5p6q7r8s9t0v1w2",
 } as const;
 /** `prefix_` + 26 base32 chars, distinct per `n`. */
 export const idN = (prefix: string, n: number) => `${prefix}_01jbz9k3m4n5p6q7r8s9t${n.toString(32).padStart(5, "0")}`;
@@ -334,4 +352,204 @@ export function refund(over: Record<string, unknown> & { next_action?: unknown }
     metadata: {},
     ...over,
   });
+}
+
+// ------------------------------------------------------------------------------- stage 3 billing
+
+export function product(over: Record<string, unknown> = {}) {
+  return Product.parse({
+    id: ids.prod,
+    object: "product",
+    created: now(),
+    updated: now(),
+    livemode: false,
+    name: "Pro plan",
+    description: null,
+    active: true,
+    metadata: {},
+    ...over,
+  });
+}
+
+export function price(over: Record<string, unknown> = {}) {
+  return Price.parse({
+    id: ids.price,
+    object: "price",
+    created: now(),
+    livemode: false,
+    product: ids.prod,
+    active: true,
+    type: "recurring",
+    unit_amount: 4900,
+    currency: "usd",
+    asset_id: null,
+    recurring: { interval: "month", interval_count: 1 },
+    nickname: null,
+    metadata: {},
+    ...over,
+  });
+}
+
+export function taxRate(over: Record<string, unknown> = {}) {
+  return TaxRate.parse({
+    id: ids.txr,
+    object: "tax_rate",
+    created: now(),
+    livemode: false,
+    display_name: "VAT",
+    description: null,
+    jurisdiction: "DE",
+    country: "DE",
+    percentage: "19",
+    rate_ppm: 190_000,
+    inclusive: false,
+    active: true,
+    metadata: {},
+    ...over,
+  });
+}
+
+/** A one-line USD invoice: 49.00 + 19 % VAT = 58.31. `status: "open"` adds number, URL and due date. */
+export function invoice(over: Record<string, unknown> = {}) {
+  const open = (over.status ?? "draft") !== "draft";
+  const tax = {
+    tax_rate: ids.txr,
+    display_name: "VAT",
+    percentage: "19",
+    inclusive: false,
+    amount: 931,
+    taxable_amount: 4900,
+  };
+  return Invoice.parse({
+    id: ids.in,
+    object: "invoice",
+    created: now(),
+    livemode: false,
+    status: "draft",
+    number: open ? "INV-00042" : null,
+    customer: ids.cus,
+    subscription: null,
+    billing_reason: "manual",
+    collection_method: "send_invoice",
+    currency: "usd",
+    asset_id: null,
+    description: null,
+    footer: null,
+    lines: [
+      {
+        id: ids.il,
+        object: "line_item",
+        type: "invoiceitem",
+        price: ids.price,
+        product: ids.prod,
+        subscription_item: null,
+        description: "Pro plan",
+        quantity: 1,
+        unit_amount: 4900,
+        amount: 4900,
+        amount_excluding_tax: 4900,
+        tax_rates: [ids.txr],
+        tax_amounts: [tax],
+        period: null,
+      },
+    ],
+    default_tax_rates: [],
+    subtotal: 4900,
+    tax: 931,
+    total: 5831,
+    total_excluding_tax: 4900,
+    total_tax_amounts: [tax],
+    amount_due: 5831,
+    amount_paid: 0,
+    amount_remaining: 5831,
+    days_until_due: 30,
+    due_date: open ? now() + 30 * 86_400 : null,
+    period_start: null,
+    period_end: null,
+    settlement_destination: null,
+    reminder_days: [-3, 0, 1, 3, 7],
+    reminders_sent: 0,
+    next_reminder_at: null,
+    hosted_invoice_url: open ? `https://pay.nearpay.money/i/${ids.in}#${ids.in}_secret_${"A".repeat(32)}` : null,
+    invoice_pdf: open ? `https://api.nearpay.money/v1/invoices/${ids.in}/pdf` : null,
+    checkout_session: null,
+    payment_intent: null,
+    payment_intents: [],
+    status_transitions: {
+      finalized_at: open ? now() : null,
+      sent_at: null,
+      paid_at: null,
+      voided_at: null,
+      marked_uncollectible_at: null,
+    },
+    uncollectible_reason: null,
+    metadata: {},
+    sequence: 0,
+    ...over,
+  });
+}
+
+export function deletedInvoice() {
+  return DeletedInvoice.parse({ id: ids.in, object: "invoice", livemode: false, deleted: true });
+}
+
+export function subscription(over: Record<string, unknown> = {}) {
+  const t = now();
+  return Subscription.parse({
+    id: ids.sub,
+    object: "subscription",
+    created: t,
+    livemode: false,
+    customer: ids.cus,
+    status: "active",
+    collection_method: "send_invoice",
+    items: [{ id: ids.si, object: "subscription_item", price: price(), quantity: 1, tax_rates: null }],
+    currency: "usd",
+    asset_id: null,
+    recurring: { interval: "month", interval_count: 1 },
+    billing_cycle_anchor: t,
+    current_period_start: t,
+    current_period_end: t + 30 * 86_400,
+    days_until_due: 7,
+    default_tax_rates: [],
+    dunning: { reminder_days: [-3, 0, 1, 3, 7], on_exhausted: "cancel" },
+    trial_start: null,
+    trial_end: null,
+    cancel_at_period_end: false,
+    canceled_at: null,
+    ended_at: null,
+    cancellation_reason: null,
+    latest_invoice: ids.in,
+    settlement_destination: null,
+    description: null,
+    metadata: {},
+    sequence: 0,
+    ...over,
+  });
+}
+
+export function testHelperPayment(outcome = "succeeded") {
+  return TestHelperPayment.parse({
+    object: "test_helper_payment",
+    checkout_session: ids.cs,
+    payment_intent: ids.pi,
+    payment_attempt: ids.pa,
+    outcome,
+  });
+}
+
+export function streamReady(over: Record<string, unknown> = {}) {
+  return EventStreamReady.parse({
+    object: "event_stream",
+    livemode: false,
+    account: ids.acct,
+    types: ["*"],
+    resumed_after: null,
+    expires_at: now() + 3600,
+    ...over,
+  });
+}
+
+export function streamReset(cursor: string, reason = "cursor_expired") {
+  return EventStreamReset.parse({ object: "event_stream_reset", reason, cursor });
 }

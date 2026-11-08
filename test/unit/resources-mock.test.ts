@@ -3,27 +3,44 @@
  * parsed strictly with the route's schemas, responses come from spec-valid fixtures, and the client
  * runs with `responseValidation: "strict"`, so a passing call proves both directions match the spec.
  */
+
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import {
   advancePaymentAttempt,
   cancelPaymentIntent,
   cancelRefund,
+  cancelSubscription,
   createCheckoutSession,
   createCustomer,
+  createInvoice,
   createPaymentIntent,
   createPaymentLink,
+  createPrice,
+  createProduct,
   createRefund,
+  createSubscription,
+  createTaxRate,
   createWebhookEndpoint,
   deleteCustomer,
+  deleteInvoice,
   deleteWebhookEndpoint,
   expireCheckoutSession,
+  finalizeInvoice,
   getAgentPayment,
   getCheckoutSession,
   getCustomer,
   getEvent,
+  getInvoice,
+  getInvoicePdf,
   getPaymentIntent,
   getPaymentLink,
+  getPrice,
+  getProduct,
   getRefund,
   getSettlementDestination,
+  getSubscription,
+  getTaxRate,
   getWebhookEndpoint,
   listAgentPayments,
   listAssets,
@@ -31,28 +48,49 @@ import {
   listCheckoutSessions,
   listCustomers,
   listEvents,
+  listInvoices,
   listPaymentIntents,
   listPaymentLinks,
+  listPrices,
+  listProducts,
   listRefunds,
   listSettlementDestinations,
+  listSubscriptions,
+  listTaxRates,
   listWebhookEndpointDeliveries,
   listWebhookEndpoints,
   listWebhookSigningKeys,
   MultiPayload,
+  markInvoiceUncollectible,
+  NearIntentsSettleResponse,
+  NearIntentsVerifyResponse,
   PaymentRequired,
+  payCheckoutSessionTestHelper,
   prepareRefund,
   resendEvent,
   reviewPaymentIntent,
   rotateWebhookEndpointSecret,
   SettleResponse,
   SupportedResponse,
+  sendInvoice,
   simulateRefundDeposit,
+  streamEvents,
   submitRefundTx,
   testWebhookEndpoint,
   updateCustomer,
+  updateInvoice,
   updatePaymentLink,
+  updatePrice,
+  updateProduct,
+  updateSubscription,
+  updateTaxRate,
   updateWebhookEndpoint,
   VerifyResponse,
+  voidInvoice,
+  X402PaymentRequiredAny,
+  x402NearIntentsRequirements,
+  x402NearIntentsSettle,
+  x402NearIntentsVerify,
   x402Requirements,
   x402Settle,
   x402Supported,
@@ -79,21 +117,35 @@ import {
   createdPaymentIntent,
   customer,
   deletedCustomer,
+  deletedInvoice,
   delivery,
   event,
   eventResend,
   ids,
   intentsVectors,
+  invoice,
   now,
   PAYER,
   page,
   paymentLink,
+  price,
+  product,
   refund,
   signIntentAction,
+  streamReady,
+  streamReset,
+  subscription,
+  taxRate,
+  testHelperPayment,
   USDC_NEAR,
   webhookEndpoint,
 } from "../support/fixtures.js";
-import { MockApiError, type SpecMock, startSpecMock } from "../support/spec-mock.js";
+import { MockApiError, openSseResponse, type SpecMock, sseFrame, startSpecMock } from "../support/spec-mock.js";
+
+const require = createRequire(import.meta.url);
+const niVectors = JSON.parse(
+  readFileSync(require.resolve("@nearpay/spec/test-vectors/x402-near-intents.json"), "utf8"),
+) as { headers: Record<string, { accepts?: unknown[] } & Record<string, unknown>> };
 
 const KEY = "sk_test_0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL";
 let mock: SpecMock;
@@ -478,6 +530,276 @@ describe("balance, destinations, assets, agent payments, x402, test helpers", ()
   });
 });
 
+describe("billing (spec 0.3.0)", () => {
+  it("products, prices and tax rates: create, retrieve, list (filters), update", async () => {
+    mock.on(createProduct, (r) => product({ name: r.body.name }));
+    mock.on(getProduct, () => product());
+    mock.on(listProducts, () => page("/v1/products", [product()]));
+    mock.on(updateProduct, () => product({ active: false }));
+    mock.on(createPrice, () => price());
+    mock.on(getPrice, () => price());
+    mock.on(listPrices, () => page("/v1/prices", [price()]));
+    mock.on(updatePrice, () => price({ nickname: "monthly" }));
+    mock.on(createTaxRate, () => taxRate());
+    mock.on(getTaxRate, () => taxRate());
+    mock.on(listTaxRates, () => page("/v1/tax_rates", [taxRate()]));
+    mock.on(updateTaxRate, () => taxRate({ active: false }));
+    expect((await np.products.create({ name: "Pro plan" })).name).toBe("Pro plan");
+    await np.products.retrieve(ids.prod);
+    await np.products.list({ active: true });
+    expect((await np.products.update(ids.prod, { active: false })).active).toBe(false);
+    const p = await np.prices.create({
+      product: ids.prod,
+      unit_amount: 4900,
+      currency: "usd",
+      recurring: { interval: "month" },
+    });
+    expect(p.recurring).toEqual({ interval: "month", interval_count: 1 });
+    await np.prices.retrieve(ids.price);
+    await np.prices.list({ product: ids.prod, type: "recurring" });
+    await np.prices.update(ids.price, { nickname: "monthly" });
+    const t = await np.taxRates.create({ display_name: "VAT", percentage: "19", inclusive: false, country: "DE" });
+    expect(t).toMatchObject({ percentage: "19", rate_ppm: 190_000 });
+    await np.taxRates.retrieve(ids.txr);
+    await np.taxRates.list({ active: true });
+    await np.taxRates.update(ids.txr, { active: false });
+    expect(mock.callsTo(listPrices)[0]?.query).toMatchObject({ product: ids.prod, type: "recurring" });
+    expect(mock.callsTo(updateTaxRate)[0]?.idempotencyKey).toBeDefined();
+    cover(createProduct, getProduct, listProducts, updateProduct, createPrice, getPrice, listPrices, updatePrice);
+    cover(createTaxRate, getTaxRate, listTaxRates, updateTaxRate);
+  });
+
+  it("invoices: draft → finalize → send, list by status/due date, void, uncollectible, delete", async () => {
+    const open = invoice({ status: "open" });
+    mock.on(createInvoice, () => invoice());
+    mock.on(getInvoice, () => open);
+    mock.on(listInvoices, () => page("/v1/invoices", [open]));
+    mock.on(updateInvoice, () => invoice({ footer: "Thanks" }));
+    mock.on(finalizeInvoice, () => open);
+    mock.on(sendInvoice, () => ({ ...open, status_transitions: { ...open.status_transitions, sent_at: now() } }));
+    mock.on(voidInvoice, () => invoice({ status: "void" }));
+    mock.on(markInvoiceUncollectible, () => invoice({ status: "uncollectible", uncollectible_reason: "merchant" }));
+    mock.on(deleteInvoice, () => deletedInvoice());
+    const draft = await np.invoices.create({
+      customer: ids.cus,
+      lines: [
+        { price: ids.price, quantity: 1 },
+        { unit_amount: 500, description: "Setup" },
+      ],
+      currency: "usd",
+      default_tax_rates: [ids.txr],
+      days_until_due: 14,
+      metadata: { order_id: "42" },
+    });
+    expect(draft.status).toBe("draft");
+    expect(draft.lastResponse?.statusCode).toBe(201);
+    await np.invoices.update(draft.id, { footer: "Thanks" });
+    const finalized = await np.invoices.finalize(draft.id);
+    expect(finalized.hosted_invoice_url).toMatch(/\/i\/in_.+#in_.+_secret_/);
+    const sent = await np.invoices.send(draft.id);
+    expect(sent.status_transitions.sent_at).not.toBeNull();
+    await np.invoices.retrieve(draft.id);
+    await np.invoices.list({ status: "open", customer: ids.cus, due_date: { lte: now() + 86_400 } });
+    await np.invoices.void(draft.id);
+    expect((await np.invoices.markUncollectible(draft.id)).uncollectible_reason).toBe("merchant");
+    expect((await np.invoices.del(draft.id)).deleted).toBe(true);
+    expect(mock.callsTo(createInvoice)[0]?.body).toMatchObject({ days_until_due: 14, metadata: { order_id: "42" } });
+    expect(mock.callsTo(listInvoices)[0]?.query).toMatchObject({ status: "open", "due_date[lte]": expect.any(Number) });
+    for (const r of [finalizeInvoice, sendInvoice, voidInvoice, markInvoiceUncollectible]) {
+      expect(mock.callsTo(r)[0]?.idempotencyKey, r.id).toMatch(/^[0-9a-f-]{36}$/);
+    }
+    expect(mock.callsTo(deleteInvoice)[0]?.idempotencyKey).toBeUndefined();
+    cover(createInvoice, getInvoice, listInvoices, updateInvoice, finalizeInvoice, sendInvoice);
+    cover(voidInvoice, markInvoiceUncollectible, deleteInvoice);
+  });
+
+  it("maps billing errors: invoice_empty on finalize, customer_email_missing on send", async () => {
+    mock.on(finalizeInvoice, () => {
+      throw new MockApiError("invoice_empty");
+    });
+    mock.on(sendInvoice, () => {
+      throw new MockApiError("customer_email_missing");
+    });
+    const e1 = await np.invoices.finalize(ids.in).catch((x: unknown) => x);
+    expect((e1 as NearPayInvalidRequestError).code).toBe("invoice_empty");
+    const e2 = await np.invoices.send(ids.in).catch((x: unknown) => x);
+    expect((e2 as NearPayInvalidRequestError).code).toBe("customer_email_missing");
+  });
+
+  it("downloads the invoice PDF as bytes with its file name", async () => {
+    const pdf = Buffer.from("%PDF-1.7\n%\xe2\xe3\xcf\xd3\n1 0 obj\n<<>>\nendobj\n%%EOF\n", "latin1");
+    mock.on(getInvoicePdf, () => ({
+      $binary: pdf,
+      $headers: { "content-disposition": 'attachment; filename="INV-00042.pdf"', "cache-control": "private, no-store" },
+    }));
+    const bytes = await np.invoices.pdf(ids.in);
+    expect(bytes).toBeInstanceOf(Uint8Array);
+    expect(Buffer.from(bytes).equals(pdf)).toBe(true);
+    expect(bytes.filename).toBe("INV-00042.pdf");
+    expect(bytes.contentType).toBe("application/pdf");
+    expect(bytes.lastResponse?.statusCode).toBe(200);
+    expect(bytes.lastResponse?.headers["cache-control"]).toBe("private, no-store");
+    const call = mock.attempts.at(-1);
+    expect(call?.headers.accept).toBe("application/pdf, application/json");
+    expect(call?.headers["idempotency-key"]).toBeUndefined();
+    cover(getInvoicePdf);
+  });
+
+  it("PDF of a draft: the JSON error is typed; a non-PDF 200 is a contract violation", async () => {
+    mock.on(getInvoicePdf, () => {
+      throw new MockApiError("state_conflict");
+    });
+    const e = await np.invoices.pdf(ids.in).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(NearPayStateConflictError);
+    mock.on(getInvoicePdf, () => ({ $binary: Buffer.from("{}"), $contentType: "application/json" }));
+    const strict = await np.invoices.pdf(ids.in).catch((x: unknown) => x);
+    expect((strict as Error).name).toBe("NearPayResponseValidationError");
+    const reports: unknown[] = [];
+    const tolerant = new NearPay(KEY, { baseUrl: mock.url, maxRetries: 0, onValidationIssue: (r) => reports.push(r) });
+    const got = await tolerant.invoices.pdf(ids.in);
+    expect(got.lastResponse?.validationIssues[0]?.code).toBe("content_type");
+    expect(reports).toHaveLength(1);
+    const off = new NearPay(KEY, { baseUrl: mock.url, maxRetries: 0, responseValidation: "off" });
+    expect((await off.invoices.pdf(ids.in)).lastResponse?.validationIssues).toEqual([]);
+  });
+
+  it("subscriptions: create (trial, dunning), retrieve, list, update, cancel at period end", async () => {
+    mock.on(createSubscription, () => subscription({ status: "trialing", trial_end: now() + 14 * 86_400 }));
+    mock.on(getSubscription, () => subscription());
+    mock.on(listSubscriptions, () => page("/v1/subscriptions", [subscription()]));
+    mock.on(updateSubscription, () => subscription({ days_until_due: 14 }));
+    mock.on(cancelSubscription, () => subscription({ cancel_at_period_end: true, cancellation_reason: "requested" }));
+    const sub = await np.subscriptions.create({
+      customer: ids.cus,
+      items: [{ price: ids.price, quantity: 2, tax_rates: [ids.txr] }],
+      trial_period_days: 14,
+      dunning: { reminder_days: [0, 3, 7], on_exhausted: "unpaid" },
+    });
+    expect(sub.status).toBe("trialing");
+    await np.subscriptions.retrieve(sub.id);
+    await np.subscriptions.list({ customer: ids.cus, status: "active" });
+    await np.subscriptions.update(sub.id, { days_until_due: 14, proration_behavior: "none" });
+    const canceled = await np.subscriptions.cancel(sub.id, { at_period_end: true });
+    expect(canceled.cancel_at_period_end).toBe(true);
+    expect(mock.callsTo(createSubscription)[0]?.body).toMatchObject({ trial_period_days: 14 });
+    cover(createSubscription, getSubscription, listSubscriptions, updateSubscription, cancelSubscription);
+  });
+});
+
+describe("agent commerce (spec 0.3.0)", () => {
+  it("x402 near-intents: requirements, verify (quote) and settle (deposit) are not retried after a 5xx", async () => {
+    const h = niVectors.headers;
+    const unquoted = (h.payment_required_unquoted?.accepts ?? [])[0];
+    mock.on(x402NearIntentsRequirements, () => X402PaymentRequiredAny.parse(h.payment_required_unquoted));
+    mock.on(x402NearIntentsVerify, () => NearIntentsVerifyResponse.parse(h.verify_response_quote));
+    mock.on(x402NearIntentsSettle, () => NearIntentsSettleResponse.parse(h.payment_response_settled));
+    const req = await np.x402.nearIntents.requirements({
+      resource: { url: "https://merchant.example/premium", description: "Premium data" },
+      amount: "1000000",
+      origins: [{ asset_id: "nep141:base-0x833589fcd6edb6e08f4c7c32d4f71b54bda02913.omft.near" }],
+    });
+    expect(req.accepts).toHaveLength(1);
+    const verify = {
+      x402Version: 2,
+      paymentPayload: h.payment_signature_quote,
+      paymentRequirements: unquoted,
+    } as never;
+    const settle = {
+      x402Version: 2,
+      paymentPayload: h.payment_signature_deposit,
+      paymentRequirements: unquoted,
+    } as never;
+    expect((await np.x402.nearIntents.verify(verify)).isValid).toBe(true);
+    expect((await np.x402.nearIntents.settle(settle)).success).toBe(true);
+    // not replay-safe: a 503 is surfaced, never repeated
+    const retrying = new NearPay(KEY, { baseUrl: mock.url, maxRetries: 2, retryBaseMs: 1, retryMaxMs: 2 });
+    mock.once(x402NearIntentsSettle, (res) => {
+      res.writeHead(503, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: { type: "api_error", code: "api_error", message: "x" } }));
+    });
+    await expect(retrying.x402.nearIntents.settle(settle)).rejects.toMatchObject({ statusCode: 503 });
+    expect(mock.attempts.filter((a) => a.url === "/x402/near-intents/settle")).toHaveLength(2);
+    cover(x402NearIntentsRequirements, x402NearIntentsVerify, x402NearIntentsSettle);
+  });
+
+  it("test helper: pays a test checkout session through the sandbox", async () => {
+    mock.on(payCheckoutSessionTestHelper, (r) => testHelperPayment(r.body.outcome));
+    const paid = await np.testHelpers.checkoutSessions.pay(ids.cs, { outcome: "payment_failed" });
+    expect(paid).toMatchObject({ outcome: "payment_failed", payment_intent: ids.pi });
+    expect(paid.lastResponse?.statusCode).toBe(202);
+    await np.testHelpers.checkoutSessions.pay(ids.cs);
+    expect(mock.callsTo(payCheckoutSessionTestHelper)[1]?.body).toEqual({ outcome: "succeeded" });
+    cover(payCheckoutSessionTestHelper);
+  });
+
+  it("events.stream: ready, events, reset; resumes with Last-Event-ID after the server closes", async () => {
+    const e1 = event("invoice.paid", invoice({ status: "paid", amount_paid: 5831, amount_remaining: 0 }), {
+      id: "evt_01jbz9k3m4n5p6q7r8s9t0v1w3",
+    });
+    const e2 = event("customer.subscription.deleted", subscription({ status: "canceled" }), {
+      id: "evt_01jbz9k3m4n5p6q7r8s9t0v1w4",
+    });
+    let n = 0;
+    mock.on(streamEvents, () => ({
+      $stream: (res) => {
+        openSseResponse(res, 5);
+        n++;
+        if (n === 1) {
+          res.write(sseFrame("ready", streamReady({ types: ["invoice.paid", "customer.subscription.deleted"] })));
+          res.write(": heartbeat\n\n");
+          res.write(sseFrame("event", e1, e1.id));
+          res.end(); // the server's 1 h close
+        } else {
+          res.write(sseFrame("ready", streamReady({ resumed_after: e1.id })));
+          res.write(sseFrame("event", e1, e1.id)); // at-least-once: a duplicate
+          res.write(sseFrame("reset", streamReset("evt_01jbz9k3m4n5p6q7r8s9t0v1w0")));
+          res.write(sseFrame("event", e2, e2.id));
+          res.end();
+        }
+      },
+    }));
+    const readies: unknown[] = [];
+    const resets: unknown[] = [];
+    const stream = np.events.stream(
+      { types: ["invoice.paid", "customer.subscription.deleted"] },
+      { onReady: (r) => readies.push(r), onReset: (r) => resets.push(r) },
+    );
+    const got: string[] = [];
+    for await (const e of stream) {
+      got.push(`${e.type}:${e.id}`);
+      if (got.length === 2) break;
+    }
+    expect(got).toEqual([`invoice.paid:${e1.id}`, `customer.subscription.deleted:${e2.id}`]);
+    expect(stream.closed).toBe(true);
+    expect(stream.lastEventId).toBe(e2.id);
+    expect(readies).toHaveLength(2);
+    expect(resets).toEqual([
+      { object: "event_stream_reset", reason: "cursor_expired", cursor: "evt_01jbz9k3m4n5p6q7r8s9t0v1w0" },
+    ]);
+    const calls = mock.callsTo(streamEvents);
+    expect(calls[0]?.query).toEqual({ types: "invoice.paid,customer.subscription.deleted" });
+    expect(calls[0]?.headers["last-event-id"]).toBeUndefined();
+    expect(calls[1]?.headers["last-event-id"]).toBe(e1.id);
+    expect(calls[1]?.headers.authorization).toBe(`Bearer ${KEY}`);
+    cover(streamEvents);
+  });
+
+  it("events.stream: a live key is refused (403 livemode_forbidden) and the iteration throws", async () => {
+    mock.on(streamEvents, () => {
+      throw new MockApiError("livemode_forbidden");
+    });
+    const stream = np.events.stream();
+    const e = await (async () => {
+      for await (const _ of stream) {
+        /* nothing */
+      }
+    })().catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(NearPayPermissionError);
+    expect((e as NearPayPermissionError).code).toBe("livemode_forbidden");
+    expect(mock.callsTo(streamEvents)).toHaveLength(1);
+  });
+});
+
 describe("credentials and idempotency against the mock", () => {
   it("a restricted key without the scope gets a permission error naming the scope", async () => {
     mock.setRestrictedScopes(["refunds.read"]);
@@ -488,8 +810,9 @@ describe("credentials and idempotency against the mock", () => {
     expect(e).toBeInstanceOf(NearPayPermissionError);
     expect((e as NearPayPermissionError).requiredScope).toBe("refunds.write");
     expect((e as Error).message).toMatch(/refunds\.write/);
+    // spec 0.3.0: the sandbox helpers also admit restricted keys (the CLI key)
     const sk = await rk.testHelpers.paymentAttempts.advance(ids.pa, { to: "success" }).catch((x: unknown) => x);
-    expect((sk as NearPayPermissionError).requiredScope).toBeUndefined();
+    expect((sk as NearPayPermissionError).requiredScope).toBe("checkout_sessions.write");
   });
 
   it("the same key with the same body is replayed; another body is idempotency_key_reused", async () => {

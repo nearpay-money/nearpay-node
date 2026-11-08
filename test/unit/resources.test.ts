@@ -32,7 +32,7 @@ const keyCallable = (r: AnyRoute) => r.auth.some((a) => a === "secret_key" || a.
 describe("resource tree vs the spec route table", () => {
   const bound = routesOf(RESOURCES);
 
-  it("binds every public route a secret or restricted key can call (Stages 1–2), exactly once", () => {
+  it("binds every public route a secret or restricted key can call (Stages 1–3), exactly once", () => {
     const expected = PUBLIC_ROUTES.filter((r) => keyCallable(r))
       .map((r) => r.id)
       .sort();
@@ -89,6 +89,28 @@ describe("resource tree vs the spec route table", () => {
         "webhookEndpoints.rotateSecret",
         "events.resend",
         "testHelpers.refunds.simulateDeposit",
+        // stage 3 (spec 0.3.0)
+        "products.create",
+        "products.update",
+        "prices.create",
+        "prices.list",
+        "taxRates.create",
+        "taxRates.retrieve",
+        "invoices.create",
+        "invoices.finalize",
+        "invoices.send",
+        "invoices.void",
+        "invoices.markUncollectible",
+        "invoices.del",
+        "invoices.pdf",
+        "subscriptions.create",
+        "subscriptions.list",
+        "subscriptions.cancel",
+        "events.stream",
+        "x402.nearIntents.requirements",
+        "x402.nearIntents.verify",
+        "x402.nearIntents.settle",
+        "testHelpers.checkoutSessions.pay",
       ]),
     );
   });
@@ -99,7 +121,18 @@ describe("resource tree vs the spec route table", () => {
     for (const r of unbound) {
       expect(keyCallable(r), r.id).toBe(false);
     }
-    for (const id of ["createApiKey", "listApiKeys", "getAccount", "getKyb", "updateRefundRecipient"]) {
+    for (const id of [
+      "createApiKey",
+      "listApiKeys",
+      "getAccount",
+      "getKyb",
+      "updateRefundRecipient",
+      "getPublicInvoice",
+      "createPublicInvoiceSession",
+      "getPublicInvoicePdf",
+      "approveCliLogin",
+      "createCliLogin",
+    ]) {
       expect(boundIds.has(id), id).toBe(false);
     }
   });
@@ -312,18 +345,64 @@ describe("Stage 2 method types", () => {
   });
 });
 
+describe("Stage 3 method types (spec 0.3.0)", () => {
+  it("types billing methods, the PDF bytes, the event stream and the test helper", () => {
+    const np = new NearPay("sk_test_types", { fetch: async () => new Response("{}") });
+    type InvoiceCreate = Parameters<typeof np.invoices.create>[0];
+    void ((b: InvoiceCreate) => b.customer);
+    void (() => np.invoices.create({ customer: "cus_x", lines: [{ price: "price_x", quantity: 2 }] }));
+    // @ts-expect-error customer is required
+    void (() => np.invoices.create({ lines: [] }));
+    type Inv = Awaited<ReturnType<typeof np.invoices.finalize>>;
+    expectTypeOf<Inv["hosted_invoice_url"]>().toEqualTypeOf<string | null>();
+    expectTypeOf<Inv["total"]>().toEqualTypeOf<string | number>();
+    expectTypeOf(np.invoices.pdf).returns.resolves.toMatchTypeOf<Uint8Array>();
+    expectTypeOf<Awaited<ReturnType<typeof np.invoices.pdf>>["filename"]>().toEqualTypeOf<string | undefined>();
+    type SQ = NonNullable<Parameters<typeof np.subscriptions.list>[0]>;
+    void ((q: SQ) => q.customer);
+    void (() => np.subscriptions.cancel("sub_x", { at_period_end: true }));
+    void (() => np.taxRates.create({ display_name: "VAT", percentage: "19", inclusive: false }));
+    // @ts-expect-error percentages are decimal strings (no floats)
+    void (() => np.taxRates.create({ display_name: "VAT", percentage: 19, inclusive: false }));
+    const stream = np.events.stream({ types: ["invoice.paid"] }, { reconnect: false });
+    stream.close();
+    void (async () => {
+      for await (const e of stream) {
+        if (e.type === "invoice.paid") expectTypeOf(e.data.object.amount_paid).toEqualTypeOf<string | number>();
+        if (e.type === "customer.subscription.deleted") expectTypeOf(e.data.object.status).toBeString();
+      }
+    });
+    expectTypeOf(stream.lastEventId).toEqualTypeOf<string | undefined>();
+    type Paid = Awaited<ReturnType<typeof np.testHelpers.checkoutSessions.pay>>;
+    expectTypeOf<Paid["payment_intent"]>().toBeString();
+    void (() => np.x402.nearIntents.requirements);
+  });
+});
+
 describe("restricted keys", () => {
   it("knows the scope of every method", () => {
     expect(restrictedKeyScope("refunds.create")).toBe("refunds.write");
     expect(restrictedKeyScope("paymentIntents.list")).toBe("payment_intents.read");
-    expect(restrictedKeyScope("testHelpers.paymentAttempts.advance")).toBeNull();
+    expect(restrictedKeyScope("testHelpers.paymentAttempts.advance")).toBe("checkout_sessions.write");
+    expect(restrictedKeyScope("invoices.pdf")).toBe("invoices.read");
+    expect(restrictedKeyScope("events.stream")).toBe("events.read");
+    expect(restrictedKeyScope("subscriptions.cancel")).toBe("subscriptions.write");
+    expect(restrictedKeyScope("taxRates.create")).toBe("products.write");
     expect(restrictedKeyScope("assets.list")).toBeNull();
     expect(() => restrictedKeyScope("nope.nope" as "assets.list")).toThrow(/unknown/);
     expect(scopesFor(["refunds.create", "refunds.retrieve", "refunds.submitTx", "assets.list"])).toEqual([
       "refunds.read",
       "refunds.write",
     ]);
-    expect(() => scopesFor(["testHelpers.refunds.simulateDeposit"])).toThrow(/secret key/);
+    // spec 0.3.0: every key-callable route admits a restricted key (the sandbox helpers too)
+    expect(scopesFor(["testHelpers.refunds.simulateDeposit", "testHelpers.checkoutSessions.pay"])).toEqual([
+      "checkout_sessions.write",
+      "refunds.write",
+    ]);
+    expect(scopesFor(["invoices.create", "invoices.finalize", "invoices.send", "invoices.pdf"])).toEqual([
+      "invoices.read",
+      "invoices.write",
+    ]);
     expect(methodAccess().get("webhookSigningKeys.list")).toEqual({ scope: null, anonymous: true });
     expect(methodAccess().size).toBe(routesOf(RESOURCES).length);
   });

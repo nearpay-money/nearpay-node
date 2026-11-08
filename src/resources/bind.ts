@@ -10,6 +10,7 @@
  */
 import type { AnyRoute, RouteDefinition, RouteResponse } from "@nearpay/spec";
 import { z } from "zod";
+import { type EventStreamOptions, type EventStreamParams, openEventStream } from "../events/stream.js";
 import { listItemSchema } from "../http/parse.js";
 import type { RequestOptions, ResponseMeta, Transport } from "../http/transport.js";
 import { type ListPage, type ListPromise, listPromise } from "./pagination.js";
@@ -107,8 +108,19 @@ export function isCursorRoute(route: Pick<AnyRoute, "query">): boolean {
   return q instanceof z.ZodObject && "starting_after" in q.shape && "ending_before" in q.shape;
 }
 
-/** Binds one route to the transport. */
-export function bindRoute(transport: Transport, route: AnyRoute): (...args: unknown[]) => Promise<unknown> {
+/**
+ * Binds one route to the transport. SSE routes (`stream`, spec 0.3.0 `streamEvents`) bind to an
+ * `EventStream` opener `(params?, options?)`; binary routes resolve with bytes (see `Transport`).
+ */
+export function bindRoute(transport: Transport, route: AnyRoute): (...args: unknown[]) => unknown {
+  if (route.stream) {
+    if (pathParamNames(route).length > 0)
+      throw new Error(`${route.id}: streams with path parameters are not supported`);
+    const open = (params?: EventStreamParams, options?: EventStreamOptions) =>
+      openEventStream(transport, route, params, options);
+    Object.defineProperty(open, "name", { value: route.id });
+    return open as (...args: unknown[]) => unknown;
+  }
   const names = pathParamNames(route);
   if (names.length > 1) throw new Error(`${route.id}: routes with more than one path parameter are not supported`);
   const takesInput = route.body !== undefined || route.query !== undefined;

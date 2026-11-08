@@ -20,7 +20,11 @@ export interface Gateway {
   stop(): Promise<void>;
 }
 
-const matchers = PUBLIC_ROUTES.map((r) => ({ route: r, re: pathMatcher(r.path) }));
+// literal segments win over `{param}` ones (`/v1/events/stream` before `/v1/events/{id}`)
+const params = (p: string) => (p.match(/\{/g) ?? []).length;
+const matchers = [...PUBLIC_ROUTES]
+  .sort((a, b) => params(a.path) - params(b.path))
+  .map((r) => ({ route: r, re: pathMatcher(r.path) }));
 
 export function matchRoute(method: string, path: string): AnyRoute | undefined {
   return matchers.find((m) => m.route.method === method && m.re.test(path))?.route;

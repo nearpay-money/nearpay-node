@@ -40,15 +40,16 @@ describe("tolerant response parsing", () => {
   it("accepts events of types this SDK does not know (single and inside a page)", async () => {
     const np = new NearPay(KEY, { baseUrl: mock.url, responseValidation: "strict" });
     const known = event("refund.succeeded", refund({ status: "succeeded" }));
-    const future = { ...known, type: "invoice.paid", data: { object: { id: "in_1", object: "invoice" } } };
+    // a type newer than this SDK's spec (0.3.0 knows invoice.* and customer.subscription.*)
+    const future = { ...known, type: "quote.accepted", data: { object: { id: "qt_1", object: "quote" } } };
     mock.on(getEvent, () => raw(future));
     mock.on(listEvents, () => raw(page("/v1/events", [known, future])));
     const one = await np.events.retrieve(ids.evt);
-    expect(one.type as string).toBe("invoice.paid");
-    expect(one.lastResponse?.unknownEnumValues).toEqual([{ path: ["type"], value: "invoice.paid" }]);
+    expect(one.type as string).toBe("quote.accepted");
+    expect(one.lastResponse?.unknownEnumValues).toEqual([{ path: ["type"], value: "quote.accepted" }]);
     const list = await np.events.list();
-    expect(list.data.map((e) => e.type as string)).toEqual(["refund.succeeded", "invoice.paid"]);
-    expect(list.lastResponse?.unknownEnumValues).toEqual([{ path: ["data", 1, "type"], value: "invoice.paid" }]);
+    expect(list.data.map((e) => e.type as string)).toEqual(["refund.succeeded", "quote.accepted"]);
+    expect(list.lastResponse?.unknownEnumValues).toEqual([{ path: ["data", 1, "type"], value: "quote.accepted" }]);
   });
 
   it("strict mode throws a NearPayResponseValidationError with the idempotency key", async () => {
