@@ -2,7 +2,7 @@
  * `nearpay.refunds.signers`: the refund signing helpers of `./refunds.ts` bound to a client, plus
  * `signAndSubmit`, which signs (or broadcasts) a refund's current leg and reports it in one call.
  */
-import type { Refund } from "@nearpay/spec";
+import type { Refund } from "@nearpay-money/spec";
 import type { RequestOptions } from "../http/transport.js";
 import {
   type CheckOptions,

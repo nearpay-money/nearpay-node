@@ -3,7 +3,7 @@
  * error envelope (architecture/api-conventions.md §6), each carrying the catalogue `code`, the HTTP
  * status and the `requestId` to quote to NearPay support.
  */
-import { ERRORS, type ErrorCode, type ErrorType, HEADERS } from "@nearpay/spec";
+import { ERRORS, type ErrorCode, type ErrorType, HEADERS } from "@nearpay-money/spec";
 import type { ValidationIssue } from "./parse.js";
 
 /** Fields of an API error envelope (`{error: {...}}`); unknown fields are kept in `raw`. */
@@ -115,7 +115,7 @@ export class NearPayConnectionError extends NearPayError {
   }
 }
 /**
- * A response (or webhook payload) does not match `@nearpay/spec` — thrown only with
+ * A response (or webhook payload) does not match `@nearpay-money/spec` — thrown only with
  * `responseValidation: "strict"` (or `constructEvent(…, {validation: "strict"})`). For a write,
  * the server already applied it: retry with `idempotencyKey` to get the stored response.
  */

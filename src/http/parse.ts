@@ -15,7 +15,7 @@
  *   retry with it to get the stored response instead of a second write).
  * - `"off"`: no parsing at all (0.1.x behaviour).
  */
-import { EventEnvelopeLoose, safeParseTolerant, type UnknownEnumValue, WEBHOOK_TYPES } from "@nearpay/spec";
+import { EventEnvelopeLoose, safeParseTolerant, type UnknownEnumValue, WEBHOOK_TYPES } from "@nearpay-money/spec";
 import { z } from "zod";
 
 export type ResponseValidation = "tolerant" | "strict" | "off";

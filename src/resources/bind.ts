@@ -1,5 +1,5 @@
 /**
- * Resource clients generated from the `@nearpay/spec` route tables (lld/sdks-and-tools.md §1): each
+ * Resource clients generated from the `@nearpay-money/spec` route tables (lld/sdks-and-tools.md §1): each
  * leaf of a resource tree is a spec route, and `bindResources` turns it into a typed method whose
  * arguments and result are derived from the route's zod schemas — no contract type is written here.
  *
@@ -8,7 +8,7 @@
  * await it for one page, or iterate it (`for await (const pi of nearpay.paymentIntents.list())`) to
  * walk every page with cursor pagination.
  */
-import type { AnyRoute, RouteDefinition, RouteResponse } from "@nearpay/spec";
+import type { AnyRoute, RouteDefinition, RouteResponse } from "@nearpay-money/spec";
 import { z } from "zod";
 import { type EventStreamOptions, type EventStreamParams, openEventStream } from "../events/stream.js";
 import { listItemSchema } from "../http/parse.js";

@@ -1,8 +1,8 @@
 /**
- * @nearpay/node — NearPay server SDK (lld/sdks-and-tools.md §1).
+ * @nearpay-money/node — NearPay server SDK (lld/sdks-and-tools.md §1).
  *
  * ```ts
- * import { NearPay } from "@nearpay/node";
+ * import { NearPay } from "@nearpay-money/node";
  * const nearpay = new NearPay(process.env.NEARPAY_SECRET_KEY!);
  * const session = await nearpay.checkout.sessions.create({ amount: 200, currency: "usd", success_url: "https://shop.example/ok" });
  * for await (const pi of nearpay.paymentIntents.list({ status: "succeeded", metadata: { order_id: "42" } })) { … }
@@ -36,7 +36,7 @@ export type {
   UnknownEnumValue,
   WebhookObjectOf,
   WebhookType,
-} from "@nearpay/spec";
+} from "@nearpay-money/spec";
 export {
   API_VERSION,
   computeInvoiceTotals,
@@ -45,7 +45,7 @@ export {
   HEADERS,
   SPEC_VERSION,
   taxPercentageToPpm,
-} from "@nearpay/spec";
+} from "@nearpay-money/spec";
 export {
   DEFAULT_BASE_URL,
   DEFAULT_MAX_RETRIES,

@@ -1,10 +1,10 @@
 /**
- * Webhook verification against the shared vectors in `@nearpay/spec/test-vectors/webhook-signatures.json`
+ * Webhook verification against the shared vectors in `@nearpay-money/spec/test-vectors/webhook-signatures.json`
  * (lld/sdks-and-tools.md §6; the same file the webhooks signer is tested with).
  */
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { WEBHOOK_TYPES } from "@nearpay/spec";
+import { WEBHOOK_TYPES } from "@nearpay-money/spec";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   computeV1Signature,
@@ -35,7 +35,7 @@ interface Vector {
 
 const require = createRequire(import.meta.url);
 const v = JSON.parse(
-  readFileSync(require.resolve("@nearpay/spec/test-vectors/webhook-signatures.json"), "utf8"),
+  readFileSync(require.resolve("@nearpay-money/spec/test-vectors/webhook-signatures.json"), "utf8"),
 ) as Vector;
 const now = v.verify_at;
 const jwks = {

@@ -7,8 +7,8 @@
  */
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { type AnyRoute, PUBLIC_ROUTES, pathMatcher, type ServiceName } from "@nearpay/spec";
 import { type MockPeer, mintTestToken, mockPeer } from "@nearpay-internal/testing";
+import { type AnyRoute, PUBLIC_ROUTES, pathMatcher, type ServiceName } from "@nearpay-money/spec";
 
 export const ACCOUNT = "acct_01jbz9k3m4n5p6q7r8s9t0v1w2";
 export const KEY_ID = "key_01jbz9k3m4n5p6q7r8s9t0v1w2";

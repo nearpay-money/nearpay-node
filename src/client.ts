@@ -1,7 +1,7 @@
 /**
  * `new NearPay(apiKey, options)` — the server SDK client (lld/sdks-and-tools.md §1).
  */
-import { API_VERSION } from "@nearpay/spec";
+import { API_VERSION } from "@nearpay-money/spec";
 import type { EventStream, EventStreamOptions, EventStreamParams } from "./events/stream.js";
 import type { ResponseValidation } from "./http/parse.js";
 import { type BinaryResult, type RequestOptions, Transport, type ValidationIssueReport } from "./http/transport.js";
@@ -35,7 +35,7 @@ export interface NearPayOptions {
   readonly retryBaseMs?: number;
   readonly retryMaxMs?: number;
   /**
-   * How responses are checked against `@nearpay/spec` (always tolerant of new open-enum values and
+   * How responses are checked against `@nearpay-money/spec` (always tolerant of new open-enum values and
    * new event types): `"tolerant"` (default) returns a non-matching body as received and reports it
    * (`lastResponse.validationIssues`, `onValidationIssue`); `"strict"` throws
    * `NearPayResponseValidationError`; `"off"` skips parsing.

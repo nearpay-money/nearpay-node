@@ -11,7 +11,7 @@ import type {
   TestHelperPayment as TestHelperPaymentSchema,
   WebhookDelivery as WebhookDeliverySchema,
   WebhookEndpoint as WebhookEndpointSchema,
-} from "@nearpay/spec";
+} from "@nearpay-money/spec";
 import type { z } from "zod";
 
 /** One event's delivery to one endpoint (`whd_…`), from `webhookEndpoints.listDeliveries`. */

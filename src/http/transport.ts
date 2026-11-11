@@ -20,7 +20,7 @@
  *   owns reconnection and resume).
  */
 import { randomUUID } from "node:crypto";
-import { type AnyRoute, buildPath, HEADERS, type UnknownEnumValue } from "@nearpay/spec";
+import { type AnyRoute, buildPath, HEADERS, type UnknownEnumValue } from "@nearpay-money/spec";
 import { SDK_VERSION } from "../version.js";
 import {
   catalogueEntry,
@@ -277,7 +277,7 @@ export class Transport {
     if (this.#warned.has(report.routeId)) return;
     this.#warned.add(report.routeId);
     process.emitWarning(
-      `NearPay response of ${report.routeId} does not match @nearpay/spec (returned as received): ${describeIssues(report.issues)}`,
+      `NearPay response of ${report.routeId} does not match @nearpay-money/spec (returned as received): ${describeIssues(report.issues)}`,
       { type: "NearPayWarning", code: "NEARPAY_RESPONSE_SHAPE" },
     );
   }
@@ -408,7 +408,7 @@ export class Transport {
           ];
           if (mode === "strict") {
             throw new NearPayResponseValidationError({
-              message: `response of ${route.id} does not match @nearpay/spec: ${describeIssues(issues)}`,
+              message: `response of ${route.id} does not match @nearpay-money/spec: ${describeIssues(issues)}`,
               statusCode: res.status,
               requestId,
               headers: resHeaders,
@@ -449,7 +449,7 @@ export class Transport {
             unknownEnumValues = outcome.unknown;
           } else if (mode === "strict") {
             throw new NearPayResponseValidationError({
-              message: `response of ${route.id} does not match @nearpay/spec: ${describeIssues(outcome.issues)}`,
+              message: `response of ${route.id} does not match @nearpay-money/spec: ${describeIssues(outcome.issues)}`,
               statusCode: res.status,
               requestId,
               headers: resHeaders,

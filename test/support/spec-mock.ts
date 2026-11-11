@@ -30,7 +30,7 @@ import {
   type RouteParams,
   type RouteQuery,
   type RouteResponse,
-} from "@nearpay/spec";
+} from "@nearpay-money/spec";
 import { z } from "zod";
 
 export interface MockRequest<R extends AnyRoute = AnyRoute> {

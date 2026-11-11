@@ -34,7 +34,7 @@ import {
   safeParseTolerant,
   type TypedEvent,
   type WebhookType,
-} from "@nearpay/spec";
+} from "@nearpay-money/spec";
 import type { z } from "zod";
 import { NearPayConnectionError, NearPayError, NearPayResponseValidationError } from "../http/errors.js";
 import { describeIssues, parseTolerantBody, type ResponseValidation, type ValidationIssue } from "../http/parse.js";
@@ -248,7 +248,7 @@ export function openEventStream(
     else
       warnOnce(
         `shape:${frame}`,
-        `NearPay event stream frame "${frame}" does not match @nearpay/spec (passed on as received): ${describeIssues(issues)}`,
+        `NearPay event stream frame "${frame}" does not match @nearpay-money/spec (passed on as received): ${describeIssues(issues)}`,
       );
   };
 
@@ -281,7 +281,7 @@ export function openEventStream(
     if (outcome.ok) return outcome.data as T;
     if (mode === "strict") {
       throw new NearPayResponseValidationError({
-        message: `event stream frame "${frame}" does not match @nearpay/spec: ${describeIssues(outcome.issues)}`,
+        message: `event stream frame "${frame}" does not match @nearpay-money/spec: ${describeIssues(outcome.issues)}`,
         raw: json,
         issues: outcome.issues,
       });

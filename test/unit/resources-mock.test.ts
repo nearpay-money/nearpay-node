@@ -7,6 +7,13 @@
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import {
+  agentPayment,
+  balanceTransaction,
+  checkoutSession,
+  paymentIntent,
+  settlementDestination,
+} from "@nearpay-internal/testing";
+import {
   advancePaymentAttempt,
   cancelPaymentIntent,
   cancelRefund,
@@ -95,14 +102,7 @@ import {
   x402Settle,
   x402Supported,
   x402Verify,
-} from "@nearpay/spec";
-import {
-  agentPayment,
-  balanceTransaction,
-  checkoutSession,
-  paymentIntent,
-  settlementDestination,
-} from "@nearpay-internal/testing";
+} from "@nearpay-money/spec";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   NearPay,
@@ -144,7 +144,7 @@ import { MockApiError, openSseResponse, type SpecMock, sseFrame, startSpecMock }
 
 const require = createRequire(import.meta.url);
 const niVectors = JSON.parse(
-  readFileSync(require.resolve("@nearpay/spec/test-vectors/x402-near-intents.json"), "utf8"),
+  readFileSync(require.resolve("@nearpay-money/spec/test-vectors/x402-near-intents.json"), "utf8"),
 ) as { headers: Record<string, { accepts?: unknown[] } & Record<string, unknown>> };
 
 const KEY = "sk_test_0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL";
