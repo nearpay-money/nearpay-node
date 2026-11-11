@@ -1,10 +1,10 @@
 /**
- * Refund signing helpers: NEP-413 / ERC-191 / raw-ed25519 against `@nearpay/spec/test-vectors`,
+ * Refund signing helpers: NEP-413 / ERC-191 / raw-ed25519 against `@nearpay-money/spec/test-vectors`,
  * the next_action checks (never a different recipient or amount), and `signAndSubmit` end to end
  * against the spec-validating mock.
  */
 
-import { getRefund, MultiPayload, submitRefundTx } from "@nearpay/spec";
+import { getRefund, MultiPayload, submitRefundTx } from "@nearpay-money/spec";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";

@@ -1,4 +1,4 @@
-import { API_VERSION, listWebhookSigningKeys } from "@nearpay/spec";
+import { API_VERSION, listWebhookSigningKeys } from "@nearpay-money/spec";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   backoffMs,

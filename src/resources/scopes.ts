@@ -3,7 +3,7 @@
  * (`restricted_key:<scope>`). Create restricted keys in the dashboard (API keys are managed with a
  * dashboard session and step-up only, so the SDK does not manage keys).
  */
-import type { AnyRoute } from "@nearpay/spec";
+import type { AnyRoute } from "@nearpay-money/spec";
 import { restrictedScopeOf } from "../http/transport.js";
 import { routesOf } from "./bind.js";
 import { RESOURCES, type Resources } from "./routes.js";

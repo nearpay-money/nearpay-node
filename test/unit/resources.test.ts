@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { type AnyRoute, ERROR_TYPES, PUBLIC_ROUTES } from "@nearpay/spec";
+import { type AnyRoute, ERROR_TYPES, PUBLIC_ROUTES } from "@nearpay-money/spec";
 import { describe, expect, expectTypeOf, it } from "vitest";
 import { errorFromResponse } from "../../src/http/errors.js";
 import { Transport } from "../../src/http/transport.js";
@@ -29,11 +29,26 @@ import { bindRoute, pathParamNames, routesOf } from "../../src/resources/bind.js
 
 const keyCallable = (r: AnyRoute) => r.auth.some((a) => a === "secret_key" || a.startsWith("restricted_key:"));
 
+/**
+ * Key-callable routes added to the spec after 0.3.0 that this SDK does not bind yet (0.4.0 is a package rename on
+ * spec 0.5.0, no new surface): the test-mode subscription clock (spec 0.3.1) and Stage 4 auto-debit mandates
+ * (spec 0.4.0). Binding them is a future minor; until then they must stay unbound so this list stays honest.
+ */
+const NOT_YET_BOUND = new Set([
+  "advanceSubscriptionClock",
+  "getMandate",
+  "listMandates",
+  "prepareMandate",
+  "prepareMandateCancel",
+  "simulateMandateFunding",
+  "simulateMandatePayerAction",
+]);
+
 describe("resource tree vs the spec route table", () => {
   const bound = routesOf(RESOURCES);
 
   it("binds every public route a secret or restricted key can call (Stages 1–3), exactly once", () => {
-    const expected = PUBLIC_ROUTES.filter((r) => keyCallable(r))
+    const expected = PUBLIC_ROUTES.filter((r) => keyCallable(r) && !NOT_YET_BOUND.has(r.id))
       .map((r) => r.id)
       .sort();
     const got = bound
@@ -119,7 +134,14 @@ describe("resource tree vs the spec route table", () => {
     const boundIds = new Set(bound.map((b) => b.route.id));
     const unbound = PUBLIC_ROUTES.filter((r) => !boundIds.has(r.id));
     for (const r of unbound) {
-      expect(keyCallable(r), r.id).toBe(false);
+      expect(keyCallable(r) && !NOT_YET_BOUND.has(r.id), r.id).toBe(false);
+    }
+    for (const id of NOT_YET_BOUND) {
+      expect(
+        PUBLIC_ROUTES.some((r) => r.id === id),
+        id,
+      ).toBe(true);
+      expect(boundIds.has(id), id).toBe(false);
     }
     for (const id of [
       "createApiKey",
@@ -254,7 +276,7 @@ describe("client", () => {
       dependencies: Record<string, string>;
     };
     expect(SDK_VERSION).toBe(pkg.version);
-    expect(Object.keys(pkg.dependencies)).toEqual(["@nearpay/spec"]);
+    expect(Object.keys(pkg.dependencies)).toEqual(["@nearpay-money/spec"]);
   });
 });
 

@@ -1,4 +1,4 @@
-import { Event, getEvent, getRefund, listEvents, listRefunds, type Refund } from "@nearpay/spec";
+import { Event, getEvent, getRefund, listEvents, listRefunds, type Refund } from "@nearpay-money/spec";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { describeIssues, isUnknownTypeEvent, parseTolerantBody } from "../../src/http/parse.js";
 import { NearPay, NearPayResponseValidationError, type ValidationIssueReport } from "../../src/index.js";
@@ -94,7 +94,7 @@ describe("tolerant response parsing", () => {
     await quiet.refunds.retrieve(ids.re);
     await quiet.refunds.retrieve(ids.re);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]?.[0])).toMatch(/getRefund does not match @nearpay\/spec/);
+    expect(String(warn.mock.calls[0]?.[0])).toMatch(/getRefund does not match @nearpay-money\/spec/);
     warn.mockRestore();
   });
 

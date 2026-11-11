@@ -31,7 +31,7 @@ import {
   RefundNextAction,
   safeParseTolerant,
   type MultiPayload as TMultiPayload,
-} from "@nearpay/spec";
+} from "@nearpay-money/spec";
 import { NearPayError } from "../http/errors.js";
 import {
   base58Decode,
@@ -157,7 +157,10 @@ export function checkRefundAction(refund: Refund, options: CheckOptions = {}): C
   }
   const parsed = safeParseTolerant(RefundNextAction, refund.next_action);
   if (!parsed.success) {
-    return fail("invalid_action", `next_action does not match @nearpay/spec: ${parsed.error.issues[0]?.message ?? ""}`);
+    return fail(
+      "invalid_action",
+      `next_action does not match @nearpay-money/spec: ${parsed.error.issues[0]?.message ?? ""}`,
+    );
   }
   const action = parsed.data;
   const leg = Array.isArray(refund.legs) ? refund.legs[0] : undefined;

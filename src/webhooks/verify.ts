@@ -26,7 +26,7 @@ import {
   WEBHOOK_TOLERANCE_SECONDS,
   type WebhookObjectOf,
   type WebhookType,
-} from "@nearpay/spec";
+} from "@nearpay-money/spec";
 import { NearPayResponseValidationError, NearPaySignatureVerificationError } from "../http/errors.js";
 import { describeIssues, parseTolerantBody, type ResponseValidation, type ValidationIssue } from "../http/parse.js";
 
@@ -173,7 +173,7 @@ export function parseEvent(
   if (outcome.ok) return outcome.data as NearPayEvent;
   if (mode === "strict") {
     throw new NearPayResponseValidationError({
-      message: `the event does not match @nearpay/spec: ${describeIssues(outcome.issues)}`,
+      message: `the event does not match @nearpay-money/spec: ${describeIssues(outcome.issues)}`,
       raw: json,
       issues: outcome.issues,
     });
@@ -238,7 +238,7 @@ export function generateTestHeaderString(o: {
   return formatSignatureHeader({ timestamp, v1: secrets.map((s) => computeV1Signature(s, timestamp, o.payload)) });
 }
 
-/** `nearpay.webhooks` (also usable without a client: `import { webhooks } from "@nearpay/node"`). */
+/** `nearpay.webhooks` (also usable without a client: `import { webhooks } from "@nearpay-money/node"`). */
 export const webhooks = Object.freeze({
   constructEvent,
   parseEvent,

@@ -2,12 +2,21 @@
  * Contract test: every SDK method is called through a minimal gateway into the spec-driven mock of the
  * owning service (`mockPeer`). The mock validates path, query and body strictly against the route,
  * authorizes the secret-key principal from the route's `auth`, and validates every response against the
- * route's response schema; so a passing call proves the SDK's request matches `@nearpay/spec` 0.3.0.
+ * route's response schema; so a passing call proves the SDK's request matches `@nearpay-money/spec` 0.3.0.
  * Stage 3 adds the billing service, the events stream (frames written through the kit's `ctx.sse()`)
  * and the invoice PDF (the kit has no binary responses yet, so the handler writes the bytes itself).
  */
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import {
+  agentPayment,
+  balanceTransaction,
+  checkoutSession,
+  mockError,
+  paymentIntent,
+  settlementDestination,
+  USDC_NEAR,
+} from "@nearpay-internal/testing";
 import {
   API_VERSION,
   advancePaymentAttempt,
@@ -101,16 +110,7 @@ import {
   x402Settle,
   x402Supported,
   x402Verify,
-} from "@nearpay/spec";
-import {
-  agentPayment,
-  balanceTransaction,
-  checkoutSession,
-  mockError,
-  paymentIntent,
-  settlementDestination,
-  USDC_NEAR,
-} from "@nearpay-internal/testing";
+} from "@nearpay-money/spec";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { NearPay, NearPayInvalidRequestError, NearPayStateConflictError } from "../../src/index.js";
 import { routesOf } from "../../src/resources/bind.js";
@@ -139,10 +139,10 @@ import { ACCOUNT, type Gateway, startGateway } from "../support/gateway.js";
 
 const require = createRequire(import.meta.url);
 const vectors = JSON.parse(
-  readFileSync(require.resolve("@nearpay/spec/test-vectors/intents-payloads.json"), "utf8"),
+  readFileSync(require.resolve("@nearpay-money/spec/test-vectors/intents-payloads.json"), "utf8"),
 ) as { binding: string; nep413: { multipayload: unknown } };
 const niVectors = JSON.parse(
-  readFileSync(require.resolve("@nearpay/spec/test-vectors/x402-near-intents.json"), "utf8"),
+  readFileSync(require.resolve("@nearpay-money/spec/test-vectors/x402-near-intents.json"), "utf8"),
 ) as { headers: Record<string, { accepts?: unknown[] } & Record<string, unknown>> };
 
 const KEY = "sk_test_0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKL";

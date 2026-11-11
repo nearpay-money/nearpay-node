@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Publishes @nearpay/node to the local registry (Verdaccio in the nearpay-deploy Compose stack, system
+ * Publishes @nearpay-money/node to the local registry (Verdaccio in the nearpay-deploy Compose stack, system
  * audit S-11), as a reproducible tarball (see `stage`), the same way nearpay-spec and nearpay-kit
  * publish. Idempotent: a version already published with identical contents is skipped; different
  * contents under the same version fail (bump the version — semver, CHANGELOG).
@@ -158,9 +158,13 @@ async function main() {
       console.log(`= ${name}@${version} already published (identical)`);
       return;
     }
-    run("npm", ["publish", tgz, "--userconfig", npmrc, "--registry", `${registry}/`, "--access", "public"], {
-      env: npmEnv,
-    });
+    run(
+      "npm",
+      ["publish", tgz, "--userconfig", npmrc, "--registry", `${registry}/`, "--access", "public", "--provenance=false"],
+      {
+        env: npmEnv,
+      },
+    );
     console.log(`+ ${name}@${version} published to ${registry}`);
   } finally {
     rmSync(work, { recursive: true, force: true });

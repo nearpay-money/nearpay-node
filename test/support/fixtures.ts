@@ -1,10 +1,11 @@
 /**
  * Spec-valid objects for tests: every builder parses its result with the spec schema, so a fixture
- * cannot drift from `@nearpay/spec`. Stage 1 objects come from `@nearpay-internal/testing`.
+ * cannot drift from `@nearpay-money/spec`. Stage 1 objects come from `@nearpay-internal/testing`.
  */
 import { createPrivateKey, createPublicKey, sign as cryptoSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { paymentIntent, USDC_NEAR } from "@nearpay-internal/testing";
 import {
   API_VERSION,
   CreatedPaymentIntent,
@@ -26,8 +27,7 @@ import {
   TestHelperPayment,
   WebhookDelivery,
   WebhookEndpoint,
-} from "@nearpay/spec";
-import { paymentIntent, USDC_NEAR } from "@nearpay-internal/testing";
+} from "@nearpay-money/spec";
 import { base58Encode } from "../../src/signing/encoding.js";
 import type { NearKeyPairLike, RefundSignIntentAction } from "../../src/signing/refunds.js";
 
@@ -37,7 +37,7 @@ export const USDC_BASE_TOKEN = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
 
 const require = createRequire(import.meta.url);
 export const intentsVectors = JSON.parse(
-  readFileSync(require.resolve("@nearpay/spec/test-vectors/intents-payloads.json"), "utf8"),
+  readFileSync(require.resolve("@nearpay-money/spec/test-vectors/intents-payloads.json"), "utf8"),
 ) as {
   nonce_base64: string;
   binding: string;
@@ -46,7 +46,7 @@ export const intentsVectors = JSON.parse(
   raw_ed25519: { seed_hex: string; signer_id: string; multipayload: Record<string, unknown> };
 };
 export const webhookVectors = JSON.parse(
-  readFileSync(require.resolve("@nearpay/spec/test-vectors/webhook-signatures.json"), "utf8"),
+  readFileSync(require.resolve("@nearpay-money/spec/test-vectors/webhook-signatures.json"), "utf8"),
 ) as {
   secret: string;
   secondary_secret: string;

@@ -1,14 +1,14 @@
 /**
- * The SDK's resource tree: every public route of `@nearpay/spec` 0.3.0 that a server holding a
+ * The SDK's resource tree: every public route of `@nearpay-money/spec` 0.3.0 that a server holding a
  * secret or restricted key can call, plus the anonymous reads a server needs (webhook signing keys,
  * assets, x402 `supported`). Not bound:
  * - payer routes (`client_secret`, and the anonymous payment-link `…/public` routes) — browsers and
- *   `@nearpay/js` call those;
+ *   `@nearpay-money/js` call those;
  * - dashboard-only routes (`session` auth only): API keys, account, KYB, team, invitations,
  *   settlement-destination writes, `updateRefundRecipient` (owner + step-up, INV-7), CLI login
  *   approval;
  * - the hosted-invoice payer routes (`/v1/invoices/{id}/public/**`, invoice secret) — the hosted
- *   invoice page and agents (`@nearpay/mcp`) call those.
+ *   invoice page and agents (`@nearpay-money/mcp`) call those.
  * `test/unit/resources.test.ts` checks this tree against `PUBLIC_ROUTES`, so a new key-callable
  * route in the spec fails the build until it is bound here.
  *
@@ -98,7 +98,7 @@ import {
   x402Settle,
   x402Supported,
   x402Verify,
-} from "@nearpay/spec";
+} from "@nearpay-money/spec";
 
 export const RESOURCES = {
   checkout: {

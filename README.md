@@ -6,7 +6,7 @@
 | ------------------------------------- | --------------------------------------------------------------------------------------------- |
 | Group                                 | SDKs & tools                                                                                  |
 | Kind                                  | library                                                                                       |
-| Ships as                              | npm: @nearpay/node                                                                            |
+| Ships as                              | npm: @nearpay-money/node                                                                      |
 | Owns                                  | Public SDK                                                                                    |
 | Depends on (published artifacts only) | spec (public)                                                                                 |
 | First built in                        | Stage 1 (step 1.3); full in Stage 2 (step 2.3); billing + events stream in Stage 3 (step 3.3) |
@@ -25,7 +25,7 @@ This repo stays surgical: design docs live in [`nearpay-brain`](../nearpay-brain
 ## Usage
 
 ```ts
-import { NearPay, NearPayError, NearPaySignatureVerificationError } from "@nearpay/node";
+import { NearPay, NearPayError, NearPaySignatureVerificationError } from "@nearpay-money/node";
 
 const nearpay = new NearPay(process.env.NEARPAY_SECRET_KEY!, {
   baseUrl: "https://api.nearpay.localhost", // default https://api.nearpay.money
@@ -39,7 +39,7 @@ const session = await nearpay.checkout.sessions.create(
 );
 redirect(session.url);
 
-// Custom payer UI: a headless intent; its client_secret is returned once (give it to @nearpay/js).
+// Custom payer UI: a headless intent; its client_secret is returned once (give it to @nearpay-money/js).
 const { client_secret } = await nearpay.paymentIntents.create({ amount: 4999, currency: "usd", return_url });
 
 // Lists: await one page, or iterate every page (cursor pagination, filters kept). ADR-0018 filters:
@@ -127,7 +127,7 @@ The iterator reconnects after the server's 1 h close, dropped or silent connecti
 45 s), 429 and 5xx (backoff 1 s → 30 s, `Retry-After` honoured) and resumes with `Last-Event-ID`, so no
 event is skipped; duplicates (delivery is at-least-once) are dropped. `starting_after` replays from an
 event (30-day retention). Errors a retry cannot fix (400, 401, 403) end the loop by throwing;
-`stream.close()` or `signal` stop it. The `@nearpay/cli` `nearpay listen` command is built on the same API.
+`stream.close()` or `signal` stop it. The `@nearpay-money/cli` `nearpay listen` command is built on the same API.
 
 ### Test helpers
 
@@ -160,7 +160,7 @@ await nearpay.testHelpers.checkoutSessions.pay(session.id, { outcome: "succeeded
 | `assets`                 | `list`                                                                                                                                                                    |
 | `testHelpers`            | `paymentAttempts.advance(attemptId, {to})`, `refunds.simulateDeposit(refundId)`, `checkoutSessions.pay(sessionId, {outcome})` (test mode)                                 |
 
-Every method is bound from a route of `@nearpay/spec` 0.3.0 (`src/resources/routes.ts`); arguments and
+Every method is bound from a route of `@nearpay-money/spec` 0.3.0 (`src/resources/routes.ts`); arguments and
 results are typed from the route's zod schemas. Shape: `(pathParam?, bodyOrQuery?, options?)` where
 `options` is `{idempotencyKey?, timeoutMs?, maxRetries?, signal?, apiVersion?}`. Results carry a
 non-enumerable `lastResponse` (`requestId`, `idempotencyKey`, `idempotentReplayed`, `attempts`, headers,
@@ -170,8 +170,8 @@ non-enumerable `lastResponse` (`requestId`, `idempotencyKey`, `idempotentReplaye
 **Not in the SDK** (the spec allows only a dashboard session for them): API keys (incl. restricted keys),
 account, KYB, team and invitations, settlement-destination writes, CLI login approval, and
 `refunds/{id}/recipient` (owner + step-up, INV-7). Payer routes (`client_secret`, payment-link `…/public`,
-hosted-invoice `/v1/invoices/{id}/public/**` with the invoice secret) belong to `@nearpay/js`, the
-hosted pages and `@nearpay/mcp`.
+hosted-invoice `/v1/invoices/{id}/public/**` with the invoice secret) belong to `@nearpay-money/js`, the
+hosted pages and `@nearpay-money/mcp`.
 
 **Restricted keys** (`rk_…`, created in the dashboard) work like secret keys for the methods their scopes
 allow: `restrictedKeyScope("refunds.create")` → `"refunds.write"`, `scopesFor([...methods])` lists what a
@@ -239,20 +239,25 @@ configure `[newSecret, {secret: oldSecret, expiresAt: endpoint.previous_secret_e
 accepted in the window, only the new one afterwards. `verifyEd25519(rawBody, header, jwks)` verifies
 `v1a` against `webhookSigningKeys.list()`; `parseEvent(json)` checks a stored event;
 `generateTestHeaderString({payload, secret | secrets})` signs payloads for your own tests (several secrets
-= a rotation delivery). All work without a client: `import { webhooks } from "@nearpay/node"`.
+= a rotation delivery). All work without a client: `import { webhooks } from "@nearpay-money/node"`.
 
 More: `examples/checkout.ts`, `examples/refund.ts`, `examples/webhook-server.ts`, `examples/invoice.ts`,
 `examples/listen.ts`.
 
-## Install (local registry)
+## Install
 
-Until public registries exist, `@nearpay/*` packages come from the local Verdaccio (`nearpay-deploy`):
-
-```
-@nearpay:registry=http://127.0.0.1:4873/
+```sh
+npm install @nearpay-money/node
 ```
 
-`zod` (^4.6.7) is a peer dependency (required by `@nearpay/spec`; npm and pnpm install it automatically).
+ESM only, Node.js ≥ 22.11. `zod` (^4.6.7) is a peer dependency (required by `@nearpay-money/spec`; npm and pnpm
+install it automatically). Documentation: https://docs.nearpay.money · Website: https://nearpay.money.
+
+The package was named `@nearpay/node` on NearPay's private registry before 0.4.0; NearPay never publishes under the
+`@nearpay` npm scope (it belongs to an unrelated company).
+
+Inside the NearPay workspace, `@nearpay-money/*` and `@nearpay-internal/*` resolve from the local Verdaccio
+(`nearpay-deploy`, `.npmrc`: `@nearpay-money:registry=http://127.0.0.1:4873/`).
 
 ## Development
 
@@ -266,7 +271,7 @@ NP_REGISTRY_PASSWORD=$(cat ../nearpay-deploy/.secrets/registry_password) pnpm re
   checks credentials, headers, Idempotency-Key, params/query/body strictly against the spec routes, replays
   stored idempotent responses and validates its own answers against the response schemas; transport
   against a scripted HTTP server (retry policy per route kind, key reuse, timeouts, aborts); tolerant
-  parsing; auto-pagination; refund signers against `@nearpay/spec/test-vectors/intents-payloads.json`;
+  parsing; auto-pagination; refund signers against `@nearpay-money/spec/test-vectors/intents-payloads.json`;
   webhook verification (incl. rotation) against `webhook-signatures.json`; resource tree vs
   `PUBLIC_ROUTES` (a new key-callable route fails the build until bound).
 - `test/contract` — every bound route called through a minimal gateway into the spec-driven service mocks
@@ -276,7 +281,11 @@ NP_REGISTRY_PASSWORD=$(cat ../nearpay-deploy/.secrets/registry_password) pnpm re
 
 ## Status
 
-0.3.0 (Stage 3, step 3.3): `lld/sdks-and-tools.md` §1 for `@nearpay/spec` 0.3.0 — billing (products,
+0.4.0: package rename to `@nearpay-money/node` (ADR-0025) on `@nearpay-money/spec` 0.5.0; no API change.
+Not bound yet (spec routes newer than 0.3.0): the test-mode subscription clock and Stage 4 mandates.
+Published to npm by `.github/workflows/release.yml` (tag `v0.4.0`).
+
+0.3.0 (Stage 3, step 3.3): `lld/sdks-and-tools.md` §1 for `@nearpay-money/spec` 0.3.0 — billing (products,
 prices, tax rates, invoices with PDF, subscriptions), the events stream, cross-chain x402 and the checkout
 test helper. Stage 4: subscription auto-debit (vault mandates).
 
@@ -284,7 +293,7 @@ test helper. Stage 4: subscription auto-debit (vault mandates).
 
 Libraries are listed here as they are added (hackathon rule Q-005). Code and documentation are written with AI assistance (Claude) under human direction and review.
 
-- Runtime: `@nearpay/spec` (contracts), `zod` (peer, via the spec); Node's built-in `fetch` and `crypto`
+- Runtime: `@nearpay-money/spec` (contracts), `zod` (peer, via the spec); Node's built-in `fetch` and `crypto`
   (HMAC-SHA256, Ed25519, `timingSafeEqual`).
 - Development: TypeScript, Vitest (+ coverage-v8), Biome, `@nearpay-internal/testing` (spec-driven mocks),
   `@noble/curves` + `@noble/hashes` (test-only: an ERC-191 signer for the spec vectors).

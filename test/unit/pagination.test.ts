@@ -1,5 +1,5 @@
-import { listAssets, listEvents, listPaymentIntents, listWebhookEndpointDeliveries } from "@nearpay/spec";
 import { paymentIntent } from "@nearpay-internal/testing";
+import { listAssets, listEvents, listPaymentIntents, listWebhookEndpointDeliveries } from "@nearpay-money/spec";
 import { afterAll, afterEach, beforeAll, describe, expect, expectTypeOf, it } from "vitest";
 import { AUTO_PAGING_MAX, NearPay, NearPayApiError, type PaymentIntent } from "../../src/index.js";
 import { delivery, event, idN, ids, page, USDC_NEAR } from "../support/fixtures.js";

@@ -1,8 +1,23 @@
 # Changelog
 
-`@nearpay/node` follows semver. Breaking changes bump the major version and carry a migration note here.
+`@nearpay-money/node` follows semver. Breaking changes bump the major version and carry a migration note here.
 
-## 0.3.0 — Stage 3, step 3.3 (`@nearpay/spec` 0.3.0)
+## 0.4.0 — 2026-11-11 (package rename, `@nearpay-money/spec` 0.5.0)
+
+Package rename, **no API change** (ADR-0025): published as **`@nearpay-money/node`** (npm org `nearpay-money`); the
+`@nearpay` npm scope belongs to an unrelated company, and earlier `@nearpay/node` versions were only on NearPay's
+local registry, so this changelog uses the new names throughout. Migrate by changing the dependency name and imports
+(`@nearpay/node` → `@nearpay-money/node`). `SDK_VERSION` (User-Agent) is `0.4.0`.
+
+- `@nearpay-money/spec` 0.3.0 → 0.5.0 (additive contracts). Key-callable routes added since spec 0.3.0 are not
+  bound yet: `advanceSubscriptionClock` (test helper) and the Stage 4 mandate routes (`getMandate`, `listMandates`,
+  `prepareMandate`, `prepareMandateCancel`, `simulateMandateFunding`, `simulateMandatePayerAction`); the route-table
+  test lists them explicitly.
+- Package metadata for the public registry (`repository`, `homepage`, `bugs`, `keywords`, `publishConfig`).
+- `.github/workflows/release.yml`: a `v*` tag (or a manual run) verifies and publishes to npm, skipping a version
+  that is already there.
+
+## 0.3.0 — Stage 3, step 3.3 (`@nearpay-money/spec` 0.3.0)
 
 Minor release: Stage 3 resources and helpers. **No breaking API change** — every 0.2 method, option,
 type and export keeps its name and shape.
@@ -48,9 +63,9 @@ Known issue (spec CR filed for 0.3.1): the spec's `TypedEvent` is built with `Om
 `data.object` narrow correctly. Use `stream.lastEventId` or `String(event.id)` until the spec fix.
 
 Not bound: hosted-invoice payer routes (`/v1/invoices/{id}/public/**`, invoice secret — hosted page and
-`@nearpay/mcp`), CLI login (`/v1/cli/logins*`, anonymous device flow and dashboard approval — `@nearpay/cli`).
+`@nearpay-money/mcp`), CLI login (`/v1/cli/logins*`, anonymous device flow and dashboard approval — `@nearpay-money/cli`).
 
-## 0.2.0 — Stage 2, step 2.3 (`@nearpay/spec` 0.2.0)
+## 0.2.0 — Stage 2, step 2.3 (`@nearpay-money/spec` 0.2.0)
 
 Minor release: new resources and helpers. **No breaking API change** — every 0.1 method, option, type
 and export keeps its name and shape. Two behaviour changes, both safer and both listed here:
@@ -95,9 +110,9 @@ Added:
   `EventDataObject`, `WebhookObjectOf`, `MultiPayload`, `ListPromise`, …
 
 Not bound (session-only in the spec): API keys, account, KYB, team/invitations, settlement-destination
-writes, `updateRefundRecipient`. Payer routes stay with `@nearpay/js`.
+writes, `updateRefundRecipient`. Payer routes stay with `@nearpay-money/js`.
 
-## 0.1.x unreleased — Stage 1, step 1.4 (`@nearpay/spec` 0.1.5; shipped in 0.2.0)
+## 0.1.x unreleased — Stage 1, step 1.4 (`@nearpay-money/spec` 0.1.5; shipped in 0.2.0)
 
 - `webhookEndpoints.listDeliveries(id, {limit?, starting_after?, ending_before?})` — an endpoint's
   delivery log (`GET /v1/webhook_endpoints/{id}/deliveries`, cursor list of `WebhookDelivery`).
@@ -108,7 +123,7 @@ writes, `updateRefundRecipient`. Payer routes stay with `@nearpay/js`.
 
 ## 0.1.0 — Stage 1, step 1.3
 
-First release (Stage 1 subset of `nearpay-brain/lld/sdks-and-tools.md` §1), built on `@nearpay/spec` 0.1.4:
+First release (Stage 1 subset of `nearpay-brain/lld/sdks-and-tools.md` §1), built on `@nearpay-money/spec` 0.1.4:
 
 - Resource clients bound from the spec route tables: `checkout.sessions` (create, retrieve, list, expire),
   `paymentIntents` (retrieve, list, cancel), `balanceTransactions.list`, `settlementDestinations`
