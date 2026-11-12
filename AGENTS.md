@@ -1,6 +1,6 @@
 # AGENTS.md — nearpay-node
 
-You are working in **nearpay-node**, one of 27 NearPay repositories (`nearpay-brain/architecture/repositories.md`).
+You are working in **nearpay-node**, one of 26 NearPay repositories (`nearpay-brain/architecture/repositories.md`).
 Scope: Server SDK for Node/TypeScript: typed resources, automatic idempotency keys and retries, webhook signature verification, refund signing helpers.
 
 ## Before changing anything

@@ -1,6 +1,11 @@
 # nearpay-node
 
-> Server SDK for Node/TypeScript: typed resources, automatic idempotency keys and retries, webhook signature verification, refund signing helpers.
+`@nearpay-money/node`: the server SDK for Node and TypeScript, with typed resources, automatic idempotency keys and retries, webhook signature verification and refund signing helpers.
+
+Part of [NearPay](https://github.com/nearpay-money/nearpay) — start there for the live demo, the architecture diagram and the full "do X, see Y" walkthrough.
+
+- **Where it sits:** a merchant's server imports it to call the NearPay API (https://api.nearpay.money) and to verify the webhooks NearPay sends. It depends only on `@nearpay-money/spec`. The testbed's merchant demo is built on it.
+- **Status:** published on npm as [`@nearpay-money/node`](https://www.npmjs.com/package/@nearpay-money/node) 0.4.0. NearPay runs on NEAR mainnet as a closed beta (https://nearpay.money); API reference at https://docs.nearpay.money.
 
 |                                       |                                                                                               |
 | ------------------------------------- | --------------------------------------------------------------------------------------------- |
@@ -13,14 +18,14 @@
 
 ## Documentation
 
-This repo stays surgical: design docs live in [`nearpay-brain`](../nearpay-brain/README.md), not here.
+Design docs live in [`nearpay-brain`](https://github.com/nearpay-money/nearpay-brain), not here.
 
-- `nearpay-brain/lld/sdks-and-tools.md` — **low-level design (dev-ready; implement from this)**
-- `nearpay-brain/lld/audits/sdks-and-tools.md` — audit findings already folded into the LLD
-- `nearpay-brain/roadmap/development-plan.md` — stage and step this repo is built in
-- `nearpay-brain/architecture/hld.md` — system design
-- `nearpay-brain/architecture/repositories.md` — repo topology and dependency rules
-- `nearpay-brain/architecture/api-conventions.md`
+- [`lld/sdks-and-tools.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/lld/sdks-and-tools.md) — low-level design this repo is implemented from
+- [`lld/audits/sdks-and-tools.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/lld/audits/sdks-and-tools.md) — audit findings already folded into the LLD
+- [`roadmap/development-plan.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/roadmap/development-plan.md) — stage and step this repo is built in
+- [`architecture/hld.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/architecture/hld.md) — system design
+- [`architecture/repositories.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/architecture/repositories.md) — repo topology and dependency rules
+- [`architecture/api-conventions.md`](https://github.com/nearpay-money/nearpay-brain/blob/main/architecture/api-conventions.md)
 
 ## Usage
 
@@ -256,15 +261,33 @@ install it automatically). Documentation: https://docs.nearpay.money · Website:
 The package was named `@nearpay/node` on NearPay's private registry before 0.4.0; NearPay never publishes under the
 `@nearpay` npm scope (it belongs to an unrelated company).
 
-Inside the NearPay workspace, `@nearpay-money/*` and `@nearpay-internal/*` resolve from the local Verdaccio
-(`nearpay-deploy`, `.npmrc`: `@nearpay-money:registry=http://127.0.0.1:4873/`).
+Inside this repo, `@nearpay-money/*` and `@nearpay-internal/*` resolve from a local registry
+(`.npmrc`: `@nearpay-money:registry=http://127.0.0.1:4873/`); see "Verify this repo".
+
+## Verify this repo
+
+Two ways, both without Docker.
+
+From npm (no clone needed):
+
+1. In an empty directory: `npm init -y && npm install @nearpay-money/node` → `package.json` lists `@nearpay-money/node` `^0.4.0`.
+2. `node --input-type=module -e 'import { NearPay, webhooks } from "@nearpay-money/node"; console.log(typeof NearPay, typeof webhooks.constructEvent)'` → prints `function function`.
+
+From this repo (Node 22, pnpm 9; the dev dependency `@nearpay-internal/testing` comes from a local package registry):
+
+1. Start the local registry (no Docker, Node 22 only):
+   `git clone https://github.com/nearpay-money/nearpay-deploy ../nearpay-deploy && ../nearpay-deploy/scripts/registry.sh start`
+   → `curl http://127.0.0.1:4873/-/ping` answers `{}`.
+2. `pnpm install --frozen-lockfile` → ends with `Done in …`, no registry errors.
+3. `pnpm test` (unit tests: every resource method against a strict spec-driven mock, transport and retries, webhook verification and refund signers against the spec's test vectors) → `Test Files  8 passed (8)`, `Tests  166 passed (166)`.
+4. `pnpm verify` (the full gate: typecheck, lint, unit tests with the coverage gate of ≥ 90 % branches and lines, contract tests, build) → exits 0; the contract step reports `Test Files  1 passed (1)`, `Tests  22 passed (22)`. Everything runs in-process against local mocks: no Docker, no external services.
 
 ## Development
 
 ```
-pnpm install
-pnpm verify          # typecheck + Biome + unit tests (coverage ≥ 90% branches) + contract tests + build
-NP_REGISTRY_PASSWORD=$(cat ../nearpay-deploy/.secrets/registry_password) pnpm release:local   # publish to 127.0.0.1:4873
+pnpm install --frozen-lockfile
+pnpm verify          # typecheck + Biome + unit tests (coverage ≥ 90% branches and lines) + contract tests + build
+NP_REGISTRY_PASSWORD=$(cat ../nearpay-deploy/.secrets/registry_password) pnpm release:local   # maintainers: publish to the local registry at 127.0.0.1:4873
 ```
 
 - `test/unit` — every resource method against `test/support/spec-mock.ts`, an in-process mock that
@@ -291,9 +314,10 @@ test helper. Stage 4: subscription auto-debit (vault mandates).
 
 ## Built with
 
-Libraries are listed here as they are added (hackathon rule Q-005). Code and documentation are written with AI assistance (Claude) under human direction and review.
-
 - Runtime: `@nearpay-money/spec` (contracts), `zod` (peer, via the spec); Node's built-in `fetch` and `crypto`
   (HMAC-SHA256, Ed25519, `timingSafeEqual`).
 - Development: TypeScript, Vitest (+ coverage-v8), Biome, `@nearpay-internal/testing` (spec-driven mocks),
   `@noble/curves` + `@noble/hashes` (test-only: an ERC-191 signer for the spec vectors).
+- Licence: Apache-2.0 (`LICENSE`).
+
+Code and documentation are written with AI assistance (Claude) under human direction and review. Built for the NEAR Hackathon (Nov 2026).
